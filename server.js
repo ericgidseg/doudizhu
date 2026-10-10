@@ -99,7 +99,7 @@ function newRoom() {
     lastPlay: null,         // { ids, ana, seat }
     multiplier: 1,
     landlordSeat: -1,
-    difficulty: 'normal',   // AI 难度: normal | hard | expert | legend
+    difficulty: 'legend',   // AI 难度: 单档 传说 (蒙特卡洛)
     played: [],             // 本局已出的所有牌 (公开信息, 供记牌器统计)
     replay: null,           // 本局录制数据 (见 recordInit)
   };
@@ -441,7 +441,7 @@ function onAddBot(conn) {
 }
 function onSolo(conn, d) {
   const room = newRoom();
-  room.difficulty = ['normal', 'hard', 'expert', 'legend'].includes(d.diff) ? d.diff : 'normal';
+  room.difficulty = 'legend';
   const p = { name: sanitize(d.name), conn, seat: 0, hand: [], wins: 0, lastIds: [] };
   room.players.push(p); room.hostSeat = 0;
   addBotToRoom(room); addBotToRoom(room);          // 座位 1、2 是两个 AI
@@ -455,12 +455,9 @@ function onSolo(conn, d) {
 function onSetDiff(conn, d) {
   const room = conn._room; if (!room) return;
   if (seatOf(room, conn) !== room.hostSeat) return;
-  if (['normal', 'hard', 'expert', 'legend'].includes(d.diff)) {
-    room.difficulty = d.diff;
-    const label = { normal: '普通', hard: '困难', expert: '大师', legend: '传说' }[d.diff];
-    broadcast(room, 'event', { event: `AI 难度已设为 ${label}` });
-    sendState(room);
-  }
+  room.difficulty = 'legend';
+  broadcast(room, 'event', { event: 'AI 难度: 传说 (唯一档位)' });
+  sendState(room);
 }
 function onRooms(conn) {
   const list = [];

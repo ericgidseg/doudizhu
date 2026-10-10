@@ -17,10 +17,7 @@
       <input id="nameInput" maxlength="12" placeholder="输入你的昵称">
       <div class="lobby-btns">
         <button id="createBtn" class="btn gold">创建房间</button>
-        <button id="soloBtn" class="btn">单人 · 简单</button>
-        <button id="soloHardBtn" class="btn warn">单人 · 困难</button>
-        <button id="soloExpertBtn" class="btn danger">单人 · 大师</button>
-        <button id="soloLegendBtn" class="btn legend">单人 · 传说</button>
+        <button id="soloLegendBtn" class="btn legend">单人 · 对战 AI</button>
       </div>
       <div class="join-row">
         <input id="roomInput" maxlength="4" inputmode="numeric" placeholder="房间号">
@@ -44,13 +41,7 @@
       <p class="sub">把房间号告诉同局域网的好友 (共需 3 人)</p>
       <ul id="waitList"></ul>
       <button id="addBotBtn" class="btn hidden">＋ 添加 AI</button>
-      <div id="diffRow" class="hidden">
-        AI 难度:
-        <button class="diff-btn" data-d="normal">普通</button>
-        <button class="diff-btn" data-d="hard">困难</button>
-        <button class="diff-btn" data-d="expert">大师</button>
-        <button class="diff-btn" data-d="legend">传说</button>
-      </div>
+      <p class="sub" style="font-size:12px;color:#8b96a8">AI: 传说 (蒙特卡洛)</p>
       <button id="startBtn" class="btn gold hidden">开始游戏</button>
       <p id="roomMsg" class="msg"></p>
     </div>

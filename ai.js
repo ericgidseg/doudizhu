@@ -1,16 +1,12 @@
 'use strict';
 /**
- * AI 决策 —— 三难度
- *   normal: 基础最小压牌 + 农民让牌 (弱)
- *   hard:   残局抢出、必压地主、队友送牌、威胁评估
- *   expert: 记牌 + 结构规划 (整手牌最少手数分解) + 深度领牌/跟牌策略
+ * AI 决策 —— 单难度 (传说)
+ *   候选生成 + 蒙特卡洛模拟选牌, 上面再叠一层规则 veto 修正
+ *   MC 在确定性局面的误判 (农民配合 / 炸弹与 2 的使用时机).
  */
 const C = require('./cards.js');
 const V = r => C.RANK_VALUE[r];
 const V2 = V('2');
-
-const DIFFS = ['normal', 'hard', 'expert', 'legend'];
-const diffAtLeast = (a, b) => DIFFS.indexOf(a) >= DIFFS.indexOf(b);
 
 /* ---------- 分组工具 ---------- */
 function groupByVal(hand) {
@@ -66,20 +62,7 @@ function bombs(hand) {
   if (sj && bj) out.push([sj[0].id, bj[0].id]);
   return out;
 }
-/** 粗算还需几次才能出完 (出牌单元) */
-function playUnits(hand) {
-  if (!hand.length) return 0;
-  const g = groupByVal(hand);
-  let u = 0;
-  for (const [v, cs] of g) u += Math.ceil(cs.length / 4); // 同点多张算1次+散牌
-  return Math.max(1, u + Math.floor(hand.length / 10));
-}
-/** 我牌里还剩几张"大牌" (A/2/王) */
-function bigCardsLeft(hand) {
-  return hand.filter(c => ['A', '2', 'SJ', 'BJ'].includes(c.rank)).length;
-}
-
-/* ============ 结构规划 (expert) ============ */
+/* ============ 结构规划 ============ */
 /**
  * 枚举手牌中所有结构化牌型 combo:
  *   { kind: 'chain'|'pairchain'|'plane'|'plane1'|'plane2'|'triple'|'triple1'|'triple2'|'pair',
@@ -305,7 +288,7 @@ function bestDecomp(hand) {
   return { moves, count: moves.length };
 }
 
-/* ---------- 记牌 (expert) ---------- */
+/* ---------- 记牌 ---------- */
 function unseenCounts(room, seat) {
   const g = groupByVal(room.players[seat].hand);
   const un = new Array(15).fill(0);
@@ -314,39 +297,6 @@ function unseenCounts(room, seat) {
   for (const c of room.played) un[V(c.rank)]--;
   for (const [v, cs] of g) un[v] -= cs.length;
   return un;  // 其余两家合计的剩余张数
-}
-function maxUnseenBelow(room, seat, thresholdV, excludeSeat) {
-  const un = unseenCounts(room, seat);
-  let max = -1;
-  // 计算 excludeSeat 自己贡献了多少 (粗略: 平分给两家也行, 这里用 played+我的牌推断另外两家)
-  // 保守: 全部 unseen 都可能集中在某一家
-  for (let v = 0; v < thresholdV; v++) if (un[v] > 0) max = v;
-  return max;
-}
-/** 两家对手(含队友)某点合计还剩几张在外 */
-function unseenAt(room, seat, v) { return unseenCounts(room, seat)[v]; }
-/** 我能否断言 "牌型 X 我的是全场最大" (顺子/连对/飞机) */
-function comboIsMax(room, seat, ana) {
-  const un = unseenCounts(room, seat);
-  // 对 chain/pairchain/plane: 若有任意 unseen 点 > main 且能组成同型更长/更高的窗口就危险
-  // 简化: 只看是否有 unseen 点数 > main
-  for (let v = ana.main + 1; v < V2; v++) {
-    if (un[v] > 0) return false;
-  }
-  return true;
-}
-/** 外面还有没有炸弹/王炸 (我手上的之外) */
-function bombThreatOut(room, seat) {
-  const un = unseenCounts(room, seat);
-  const myG = groupByVal(room.players[seat].hand);
-  let threat = 0;
-  for (let v = 0; v < V2; v++) {
-    // 某点 4 张全在别人那里 -> 潜在炸弹
-    if (un[v] === 4) threat++;
-    // 也可能: 别人凑齐 4 张 (un[v]===4 是必要条件)
-  }
-  if (un[V('SJ')] === 1 && un[V('BJ')] === 1) threat++; // 王炸可能在外
-  return threat;
 }
 
 /* ---------- 叫分 ---------- */
@@ -367,16 +317,12 @@ function handScore(hand) {
   if (plane) s += 2;
   return s;
 }
-function chooseBid(hand, currentBid, diff) {
+function chooseBid(hand, currentBid) {
+  // 牌力分 + 分解手数加成 (手数少也是叫分资本)
   const s = handScore(hand);
-  if (diff === 'expert') {
-    // 结合分解手数: 手数少也是叫分资本
-    const d = bestDecomp(hand);
-    const eff = s + Math.max(0, 8 - d.count) * 0.6;
-    const want = eff >= 6 ? 3 : eff >= 4.2 ? 2 : eff >= 2.6 ? 1 : 0;
-    return want > currentBid ? want : 0;
-  }
-  const want = s >= 6 ? 3 : s >= 4 ? 2 : s >= 2.5 ? 1 : 0;
+  const d = bestDecomp(hand);
+  const eff = s + Math.max(0, 8 - d.count) * 0.6;
+  const want = eff >= 6 ? 3 : eff >= 4.2 ? 2 : eff >= 2.6 ? 1 : 0;
   return want > currentBid ? want : 0;
 }
 
@@ -561,401 +507,6 @@ function beatCandidates(hand, lastAna) {
     if (sj && bj) push([sj[0].id, bj[0].id]);
   }
   return out;
-}
-
-/* ---------- 领牌 ---------- */
-function leadPlay(hand, room, seat, diff) {
-  const g = groupByVal(hand);
-  const cand = [];
-  const push = ids => { if (ids && ids.length) cand.push(ids); };
-  const bombSet = new Set(bombs(hand).flat());
-
-  const run1 = longestRun(g, 1, 5), run2 = longestRun(g, 2, 3), run3 = longestRun(g, 3, 2);
-  if (run1) push(idsOfRun(g, run1, 1));
-  if (run2) push(idsOfRun(g, run2, 2));
-  if (run3) {
-    const body = idsOfRun(g, run3, 3);
-    const ex = new Set(body);
-    const exv = new Set(run3);
-    push(body.concat(lowSingles(g, run3.length, ex, exv) || lowPairs(g, run3.length, ex, exv) || []));
-  }
-  // 三带一/二 (带最小散牌)
-  for (const v of [...g.keys()].sort((a, b) => a - b)) {
-    if (g.get(v).length >= 3) {
-      const tri = g.get(v).slice(0, 3).map(c => c.id);
-      const ex = new Set([...tri, ...bombSet]);
-      const exv = new Set([v]);
-      const s = lowSingles(g, 1, ex, exv) || (lowPairs(g, 1, ex, exv) || []).slice(0, 2);
-      push(tri.concat(s || []));
-      break;
-    }
-  }
-  for (const v of [...g.keys()].sort((a, b) => a - b)) {
-    const cs = g.get(v).filter(c => !bombSet.has(c.id));
-    if (cs.length === 2) { push(cs.map(c => c.id)); break; }
-  }
-  const sorted = C.sortCards(hand);
-  const low = [...sorted].reverse().find(c => !bombSet.has(c.id));
-  if (low) push([low.id]);
-  if (!cand.length) push([sorted[sorted.length - 1].id]);
-
-  if (diffAtLeast(diff, 'hard')) {
-    /* 残局: 只剩 ≤3 张能一次出完的牌型优先 */
-    const finish = cand.find(c => c.length === hand.length);
-    if (finish) return finish;
-    /* 队友 (农民) 只剩 1-2 张: 出小单送队友接牌走 */
-    if (seat !== room.landlordSeat) {
-      const mates = room.players.filter(p => p.seat !== room.landlordSeat && p.seat !== seat);
-      const mate = mates[0];
-      if (mate && mate.hand.length <= 2) {
-        const single = cand.find(c => c.length === 1 && V(cardById(hand, c[0]).rank) < V('Q'));
-        if (single) return single;
-      }
-    }
-    /* 地主: 优先甩长牌型清手牌, 剩牌少则先走大单 */
-    if (seat === room.landlordSeat && hand.length <= 5) {
-      const big = [...sorted].find(c => !bombSet.has(c.id));
-      if (big) return [big.id];
-    }
-    /* 地主领出策略: 手数还很多时先出"被压损失小"的牌型(顺子/三带/连对),
-       且优先出小点数的对子/单张而不是把大牌型先甩完 */
-    if (seat === room.landlordSeat) {
-      const plan = bestDecomp(hand);
-      const moves = plan.moves.filter(m => !m.isBomb);
-      /* 农民临门: 避开对手张数刚好能接的牌型
-         剩1张→别出单; 剩2张→别出对; 剩3张→别出三张/三带; 剩5张→别出顺5 */
-      const dangerType = new Set();
-      for (const p of room.players) {
-        if (p.seat === seat) continue;
-        const n = p.hand.length;
-        if (n === 1) dangerType.add(C.TYPE.SINGLE);
-        if (n === 2) dangerType.add(C.TYPE.PAIR);
-        if (n === 3) { dangerType.add(C.TYPE.TRIPLE); dangerType.add(C.TYPE.PAIR); }
-        if (n === 4) { dangerType.add(C.TYPE.TRIPLE_1); dangerType.add(C.TYPE.SINGLE); }
-        if (n === 5) { dangerType.add(C.TYPE.TRIPLE_2); dangerType.add(C.TYPE.CHAIN); }
-      }
-      const safe = moves.filter(m => !dangerType.has(m.ana.type));
-      const pool = safe.length ? safe : moves;
-      // 只有 2 手时: 先走小的一手, 留大的收尾
-      if (pool.length === 2) {
-        return (pool[0].ana.main <= pool[1].ana.main ? pool[0] : pool[1]).ids;
-      }
-      // 有长牌型且我牌还多: 先甩 (被压概率低)
-      const long = pool.filter(m =>
-        [C.TYPE.CHAIN, C.TYPE.PAIR_CHAIN, C.TYPE.AIRPLANE, C.TYPE.AIRPLANE_1, C.TYPE.AIRPLANE_2].includes(m.ana.type));
-      if (long.length && hand.length > 10) {
-        return long.sort((a, b) => b.ids.length - a.ids.length)[0].ids;
-      }
-      // 三带优先 (带掉小牌)
-      const tri = pool.filter(m => m.kind && m.kind.startsWith('triple'))
-        .sort((a, b) => b.ids.length - a.ids.length || a.ana.main - b.ana.main);
-      if (tri.length && hand.length > 8) return tri[0].ids;
-      // 否则最小对子 > 最小单张 (对子更难被农民接力)
-      const pairs = pool.filter(m => m.ana.type === C.TYPE.PAIR).sort((a, b) => a.ana.main - b.ana.main);
-      if (pairs.length) return pairs[0].ids;
-      if (pool.length) return pool.sort((a, b) => a.ana.main - b.ana.main)[0].ids;
-    }
-    cand.sort((a, b) => b.length - a.length);
-    return cand[0];
-  }
-  cand.sort((a, b) => b.length - a.length);
-  return cand[0];
-}
-
-/* ---------- expert 领牌: 按分解方案 + 记牌 ---------- */
-function expertLead(hand, room, seat) {
-  const plan = bestDecomp(hand);
-  const moves = plan.moves;
-  if (!moves.length) return leadPlay(hand, room, seat, 'hard');
-  const sorted = C.sortCards(hand);
-  const isLord = seat === room.landlordSeat;
-  const mates = room.players.filter(p => p.seat !== room.landlordSeat && p.seat !== seat);
-
-  /* 一把能出完 */
-  const fin = moves.find(m => m.ids.length === hand.length);
-  if (fin) return fin.ids;
-
-  /* 农民队友只剩 1 张: 喂最小单 (别喂对子, 防止卡住) */
-  if (!isLord) {
-    const mate = mates[0];
-    if (mate) {
-      if (mate.hand.length === 1) {
-        const sg = moves.filter(m => m.ana.type === C.TYPE.SINGLE && !m.isBomb)
-          .sort((a, b) => a.ana.main - b.ana.main);
-        if (sg.length) {
-          // 确认地主可能拦截也要喂 —— 喂最小
-          return sg[0].ids;
-        }
-      }
-      if (mate.hand.length === 2) {
-        // 队友剩 2 张: 优先小对子(他可能对子), 其次小单
-        const pr = moves.filter(m => m.ana.type === C.TYPE.PAIR && m.ana.main < V('Q'))
-          .sort((a, b) => a.ana.main - b.ana.main);
-        if (pr.length) return pr[0].ids;
-        const sg = moves.filter(m => m.ana.type === C.TYPE.SINGLE && !m.isBomb)
-          .sort((a, b) => a.ana.main - b.ana.main);
-        if (sg.length) return sg[0].ids;
-      }
-    }
-  }
-
-  /* 剩 2 手以内: 先出"对手拦不住"的那手, 保证收尾 */
-  if (moves.length === 2) {
-    const [m1, m2] = moves;
-    // 若 m1 是炸弹/王炸, 先走非炸的
-    if (m1.isBomb && !m2.isBomb) return m2.ids;
-    if (m2.isBomb && !m1.isBomb) return m1.ids;
-    // 两手都非炸: 先出较难被压的; 若一手是"全场最大"则另一手先走? 保守: 先小后大留住控场
-    // 但若先走小的会被地主接走反杀 —— 判断对手剩牌
-    const lordCnt = room.players[room.landlordSeat].hand.length;
-    if (!isLord && lordCnt <= 3) {
-      // 地主快赢: 先甩最稳的(大)牌
-      return (m1.ana.main >= m2.ana.main ? m1 : m2).ids;
-    }
-    return (m1.ana.main <= m2.ana.main ? m1 : m2).ids;
-  }
-
-  /* 常规: 优先出"出牌权难被抢"的长牌型 (顺子/连对/飞机), 且我用记牌确认是最大 */
-  const longMoves = moves.filter(m =>
-    !m.isBomb && [C.TYPE.CHAIN, C.TYPE.PAIR_CHAIN, C.TYPE.AIRPLANE, C.TYPE.AIRPLANE_1, C.TYPE.AIRPLANE_2].includes(m.ana.type));
-  for (const m of longMoves.sort((a, b) => b.ids.length - a.ids.length)) {
-    if (comboIsMax(room, seat, m.ana)) return m.ids;
-  }
-  // 长牌型即便不是最大, 也优先清 (除非地主临门)
-  const lordCnt = room.players[room.landlordSeat].hand.length;
-  if (longMoves.length && !(isLord && bombThreatOut(room, seat) >= 2 && hand.length <= 8)) {
-    if (isLord || lordCnt > 4) return longMoves[0].ids;
-  }
-
-  /* 三带: 带小牌清散张 */
-  const tri = moves.filter(m => !m.isBomb && (m.kind === 'triple1' || m.kind === 'triple2' || m.kind === 'triple'))
-    .sort((a, b) => b.ids.length - a.ids.length || a.ana.main - b.ana.main);
-  if (tri.length) {
-    const t = tri[0];
-    // 若三张主体够大(K/A)或外面 2 已尽, 可当控场牌先留; 否则早出
-    if (t.ana.main < V('K') || hand.length <= 8) return t.ids;
-  }
-
-  /* 对子策略: 地主/农民都先用小对子试牌权, 但下家若是队友且牌少就避免 */
-  const pairs = moves.filter(m => !m.isBomb && m.ana.type === C.TYPE.PAIR)
-    .sort((a, b) => a.ana.main - b.ana.main);
-  const singles = moves.filter(m => !m.isBomb && m.ana.type === C.TYPE.SINGLE)
-    .sort((a, b) => a.ana.main - b.ana.main);
-
-  if (!isLord && mates[0] && mates[0].hand.length <= 3 && singles.length) {
-    return singles[0].ids; // 队友快走完, 出单让他接
-  }
-
-  /* 地主残局: 大单压场 */
-  if (isLord && hand.length <= 5) {
-    const bigSg = singles.filter(m => m.ana.main >= V('A'));
-    if (bigSg.length) return bigSg[0].ids;
-  }
-  if (pairs.length && hand.length > 6) {
-    // 早中期: 小对子先出 (通常能过一圈)
-    const small = pairs.filter(m => m.ana.main < V('J'));
-    if (small.length) return small[0].ids;
-  }
-  if (singles.length) {
-    // 保留最大单牌控场: 出"倒数第二小"附近; 简单起见出最小非炸单
-    return singles[0].ids;
-  }
-  if (pairs.length) return pairs[0].ids;
-  // 兜底
-  const nonBomb = moves.filter(m => !m.isBomb);
-  return (nonBomb[0] || moves[0]).ids;
-}
-
-/* ---------- 是否压牌 ---------- */
-function shouldBeat(room, seat, hand, lastAna, ids, diff) {
-  const meFarmer = seat !== room.landlordSeat;
-  const lastSeat = room.lastPlay.seat;
-  const lastFarmer = lastSeat !== room.landlordSeat;
-  const lastCnt = room.players[lastSeat].hand.length;
-  const lordCnt = room.players[room.landlordSeat].hand.length;
-  const ana2 = ids ? anaOfIds(hand, ids) : null;
-  const isBomb = ana2 && (ana2.type === C.TYPE.BOMB || ana2.type === C.TYPE.ROCKET);
-
-  if (!ids) return false;
-
-  /* 队友出牌: 原则上不压 —— 我压了牌权到我这, 牌还是得出, 白浪费大牌.
-   * 例外: 我能一把走完 / 队友牌还很多而地主只剩1-2张等着收 */
-  if (meFarmer && lastFarmer) {
-    if (hand.length === ids.length) return true;                       // 能出完
-    if (lastAna.type === C.TYPE.ROCKET || lastAna.type === C.TYPE.BOMB) return false;
-    if (diffAtLeast(diff, 'hard') && lastCnt <= 2) return false;       // 队友临门, 让他走
-    // 队友出大牌(A/2/王 或 长牌型): 让, 地主都不一定接得住
-    if (lastAna.type === C.TYPE.SINGLE && lastAna.main >= V('A')) {
-      if (diffAtLeast(diff, 'hard') && lastCnt <= 3) return false;
-      if (Math.random() < (diffAtLeast(diff, 'hard') ? 0.85 : 0.7)) return false;
-    }
-    if ([C.TYPE.CHAIN, C.TYPE.PAIR_CHAIN, C.TYPE.AIRPLANE, C.TYPE.AIRPLANE_1, C.TYPE.AIRPLANE_2].includes(lastAna.type)) {
-      if (Math.random() < (diffAtLeast(diff, 'hard') ? 0.8 : 0.5)) return false;
-    }
-    /* 队友出小牌: 我可以用"不太贵的牌"接力, 让牌权留在农民方;
-       但要动大牌或拆结构就让队友继续 */
-    if (diffAtLeast(diff, 'hard')) {
-      const myMain = ana2.main;
-      const g = groupByVal(hand);
-      const used = {};
-      for (const id of ids) { const v = V(cardById(hand, id).rank); used[v] = (used[v] || 0) + 1; }
-      let breakStructure = false;
-      for (const v in used) {
-        const tot = g.get(+v).length;
-        if (tot >= 3 && used[v] < tot) { breakStructure = true; break; }  // 拆了三张/四张
-      }
-      if (isBomb) return false;                            // 不炸队友
-      if (lordCnt <= 1) return true;                       // 地主只剩1张, 挡死
-      // 接力条件: 我快走完 / 压牌不太大 / 队友出了小牌我顺势接手
-      if (breakStructure) {
-        // 拆三张/炸弹为队友接力, 只有我出完这手就赢才值
-        return hand.length <= ids.length;
-      }
-      if (hand.length <= 6) return true;                   // 我快走完, 抢主动权
-      if (myMain <= V('K')) return true;                   // 小牌接力很划算
-      if (myMain <= V('2') && lastAna.main >= V('J')) return true;  // 队友中牌, 我用大牌盖 (防地主接)
-      return false;                                      // 队友小牌我要动 2/王 -> 让
-    }
-    /* normal: 大概率让 */
-    return Math.random() < 0.25;
-  }
-
-  /* 地主只剩 ≤2 张: 农民坚决不能放 */
-  if (meFarmer && !lastFarmer && lordCnt <= 2) {
-    return diffAtLeast(diff, 'hard') ? true : Math.random() < 0.9;
-  }
-  if (diffAtLeast(diff, 'hard') && meFarmer && !lastFarmer && lordCnt === 1 && lastAna.type === C.TYPE.SINGLE) {
-    return true;
-  }
-  /* 炸弹使用决策 */
-  if (isBomb) {
-    if (hand.length <= ids.length + 1) return true;          // 能出完
-    if (!lastFarmer && lordCnt <= 4) return true;            // 地主快赢
-    if (diffAtLeast(diff, 'hard') && playUnits(hand) <= 2) return true;
-    if (diffAtLeast(diff, 'hard') && bigCardsLeft(hand) >= 3) return true;
-    return Math.random() < (diffAtLeast(diff, 'hard') ? 0.45 : 0.3);
-  }
-  /* 农民压地主: 我能走完必压; 用大牌压小牌时看地主剩牌决定值不值 */
-  if (diffAtLeast(diff, 'hard') && meFarmer && !lastFarmer && !isBomb) {
-    if (hand.length <= 4) return true;                        // 我快出完
-    const myMain = ana2.main;
-    if (lastAna.type === C.TYPE.SINGLE) {
-      // 地主出小单, 我要用 2/王 压: 地主牌还多时让给队友顶 (队友后出)
-      if (myMain >= V('2') && lordCnt > 6) {
-        const mate = room.players.find(p => p.seat !== room.landlordSeat && p.seat !== seat);
-        if (mate && mate.hand.length <= hand.length) return false;  // 队友牌更少, 他更适合顶
-        return Math.random() < 0.4;                          // 40% 忍一手
-      }
-    }
-    if (lastAna.type === C.TYPE.PAIR && myMain >= V('A') && lordCnt > 6) {
-      return Math.random() < 0.55;                           // 对 A/对2 压小对, 一半概率忍
-    }
-  }
-  /* normal: 农民压地主有点钝 —— 30% 会放过不该放的 */
-  if (diff === 'normal' && meFarmer && !lastFarmer && !isBomb && lordCnt > 3) {
-    return Math.random() < 0.75;
-  }
-  if (diffAtLeast(diff, 'hard') && hand.length <= 4 && !isBomb) return true;
-  return true;
-}
-
-/* ---------- expert 压牌决策 ---------- */
-function expertShouldBeat(room, seat, hand, lastAna, ids) {
-  const ana2 = anaOfIds(hand, ids);
-  const isBomb = ana2.type === C.TYPE.BOMB || ana2.type === C.TYPE.ROCKET;
-  const meFarmer = seat !== room.landlordSeat;
-  const lastSeat = room.lastPlay.seat;
-  const lastFarmer = lastSeat !== room.landlordSeat;
-  const lordCnt = room.players[room.landlordSeat].hand.length;
-  const mateCnts = room.players.filter(p => p.seat !== room.landlordSeat && p.seat !== seat).map(p => p.hand.length);
-
-  /* 能一把出完: 必出 */
-  if (hand.length === ids.length) return true;
-
-  /* 队友出的牌 */
-  if (meFarmer && lastFarmer) {
-    const lastCnt = room.players[lastSeat].hand.length;
-    if (lastCnt <= 2) return false;                            // 让队友走
-    if (lastAna.type === C.TYPE.ROCKET || lastAna.type === C.TYPE.BOMB) return false;
-    // 队友已经压过地主的大牌, 我接力意义不大; 除非我几乎走完且这是免费窗口
-    if (lastAna.main >= V('A') || lastAna.type === C.TYPE.CHAIN || lastAna.type === C.TYPE.PAIR_CHAIN) {
-      return hand.length <= 5 && !isBomb;
-    }
-    // 队友出小牌, 我可以接手控场: 用手头富裕牌型接, 别用炸
-    if (isBomb) return false;
-    // 接牌成本: 若我的 ids 含 2/王级大牌 且地主牌还多, 可以忍一手? 简化: 出
-    return true;
-  }
-
-  /* 地主出的牌 (我是农民) 或 农民出的牌 (我是地主) */
-  if (meFarmer && !lastFarmer) {
-    /* 地主临门: 必压 */
-    if (lordCnt <= 2) return true;
-    if (lordCnt <= 4 && !isBomb) return true;
-    if (isBomb) {
-      if (lordCnt <= 5) return true;
-      // 外面威胁: 若地主很可能有更大炸, 忍
-      const threat = bombThreatOut(room, seat);
-      if (threat > 0 && hand.length > 8) return false;
-      // 出完炸后手数 ≤2 才值得
-      const rest = hand.filter(c => !ids.includes(c.id));
-      return bestDecomp(rest).count <= 2;
-    }
-    /* 地主出大牌 (2/王): 用最小能压的接, 别拆炸 */
-    if (lastAna.type === C.TYPE.SINGLE && lastAna.main >= V('2') && ana2.main >= V('SJ')) {
-      // 用王压 2: 若地主牌还多且我有小些的应对空间, 可让一手等队友
-      const mate = mateCnts[0];
-      if (mate != null && mate <= 6) return false;   // 队友牌少, 让他先顶
-    }
-    return true;
-  }
-
-  /* 我是地主, 农民出牌 */
-  if (!meFarmer) {
-    // 农民快出完 -> 必压
-    const lastCnt = room.players[lastSeat].hand.length;
-    if (lastCnt <= 2) return true;
-    if (isBomb) {
-      if (lastCnt <= 4) return true;
-      const rest = hand.filter(c => !ids.includes(c.id));
-      if (bestDecomp(rest).count <= 2) return true;
-      // 倍数与节奏: 手牌 ≤ 6 手才炸
-      return playUnits(hand) <= 5 && hand.length <= 14;
-    }
-    // 顶门板: 用大牌压制, 但保留绝对大牌? 简化: 出
-    return true;
-  }
-  return true;
-}
-
-/* ---------- 候选排序: expert 选"最优"压牌 ---------- */
-function pickBeat(hand, room, seat, lastAna) {
-  const cands = beatCandidates(hand, lastAna);
-  if (!cands.length) return null;
-  const bombSet = new Set(bombs(hand).flat());
-  const score = ids => {
-    const ana = anaOfIds(hand, ids);
-    let s = 0;
-    // 越大越差
-    s += Math.min(ana.main, 30) * 2;
-    // 拆弹惩罚
-    for (const id of ids) if (bombSet.has(id) && !(ana.type === C.TYPE.BOMB || ana.type === C.TYPE.ROCKET)) s += 60;
-    if (ana.type === C.TYPE.BOMB) s += 40;
-    if (ana.type === C.TYPE.ROCKET) s += 80;
-    // 拆顺子/三带结构惩罚: 若拿出的散牌破坏了 combos —— 近似: 用了 2 张同点(拆三张)罚
-    const g = groupByVal(hand);
-    const used = {};
-    for (const id of ids) { const v = V(cardById(hand, id).rank); used[v] = (used[v] || 0) + 1; }
-    for (const v in used) {
-      const total = g.get(+v) ? g.get(+v).length : 0;
-      if (total >= 3 && used[v] < total && total !== 4) s += 12; // 拆三张
-      if (total === 4 && used[v] < 4) s += 25;
-    }
-    // 多带牌(三带)让翅膀带小牌加分
-    return s;
-  };
-  cands.sort((a, b) => score(a) - score(b));
-  return cands[0];
 }
 
 /* ============ 传说 (legend): 蒙特卡洛模拟选牌 ============
@@ -1264,6 +815,53 @@ function legendDecide(room, seat) {
     // 出完校验
     const fin = cands.find(ids => ids.length === hand.length);
     if (fin) return { type: 'play', ids: fin };
+    /* 有"必赢的长牌型"时, 单领 2/SJ/BJ 是浪费: 长牌型一次甩 ≥5 张且
+       同样稳拿牌权 (r5389-1 步15: 地主 11 张里有 678910JQKA 顺子
+       没人接得住, MC 却领单张 BJ——王只甩 1 张, 顺子甩 8 张).
+       把单张 2/王 领出剔除 (单张 3-K 仍可做试探保留). */
+    {
+      const un = unseenCounts(room, seat);
+      /* 炸弹/王炸可能在外 -> 没有"必赢"牌型 */
+      let bombOut = un[V('SJ')] === 1 && un[V('BJ')] === 1;
+      if (!bombOut) for (let v = 0; v < V2; v++) if (un[v] >= 4) { bombOut = true; break; }
+      const unbeat = !bombOut && cands.find(ids => {
+        if (ids.length < 5) return false;
+        const a = anaOfIds(hand, ids);
+        if (a.type === C.TYPE.BOMB || a.type === C.TYPE.ROCKET) return false;
+        /* 同型更高组合是否还可能拼出来:
+           顺子(len张连续, 需 main 之上的等长窗口各点>=1)
+           连对(len/2 个连续对, 窗内各点>=2)
+           飞机(连续三张组, 窗内各点>=3)
+           三张/四带: main 之上任意点 >=3/4 张即可 */
+        if (a.type === C.TYPE.CHAIN || a.type === C.TYPE.PAIR_CHAIN || a.type === C.TYPE.AIRPLANE || a.type === C.TYPE.AIRPLANE_1 || a.type === C.TYPE.AIRPLANE_2) {
+          const need = a.type === C.TYPE.CHAIN ? 1 : a.type === C.TYPE.PAIR_CHAIN ? 2 : 3;
+          const width = a.type === C.TYPE.CHAIN ? a.len : a.type === C.TYPE.PAIR_CHAIN ? a.len / 2 : a.len / (a.type === C.TYPE.AIRPLANE ? 3 : a.type === C.TYPE.AIRPLANE_1 ? 4 : 5);
+          for (let hi = a.main + 1; hi + width - 1 < V2; hi++) {
+            let ok = true;
+            for (let v = hi; v < hi + width; v++) if (un[v] < need) { ok = false; break; }
+            if (ok) return false;   // 外面能拼出更高的同型
+          }
+          return true;
+        }
+        if (a.type === C.TYPE.TRIPLE || a.type === C.TYPE.TRIPLE_1 || a.type === C.TYPE.TRIPLE_2) {
+          for (let v = a.main + 1; v < V2; v++) if (un[v] >= 3) return false;
+          return true;
+        }
+        if (a.type === C.TYPE.FOUR_2 || a.type === C.TYPE.FOUR_2_2) {
+          for (let v = a.main + 1; v < V2; v++) if (un[v] >= 4) return false;
+          return true;
+        }
+        return false;   // 单张/对子走不到这里 (len<5)
+      });
+      if (unbeat) {
+        const kept = cands.filter(ids => {
+          if (ids.length !== 1) return true;
+          const v = V(cardById(hand, ids[0]).rank);
+          return v < V2;   // 剔掉单张 2/小王/大王 领出
+        });
+        if (kept.length) cands = kept;
+      }
+    }
     /* 2/王是"每张都能稳拿一次牌权"的控制牌. 手牌还很散(分解手数多,
        后面必然要靠 2/王 收回牌权)时, 一手牌里塞 >=2 张 2 属于把多张
        保险一次烧掉 (r5389-3: 地主开局 2224, 之后满手散牌再没拿过
@@ -1416,19 +1014,73 @@ function legendDecide(room, seat) {
     if (!meFarmer) {
       const lastLeft = room.players[lastSeat].hand.length;
       const la = lp.ana;
-      if (lastLeft > 4 && la.main < V2 && la.type !== C.TYPE.BOMB && la.type !== C.TYPE.ROCKET) {
+      /* 农民 >6 张时连他出的 2/王 也不值得炸——牌权很快会回来;
+         他 ≤6 张时 2/王 算临门必压, 炸的候选保留 */
+      const veto = la.main < V2 || lastLeft > 6;
+      if (lastLeft > 4 && veto && la.type !== C.TYPE.BOMB && la.type !== C.TYPE.ROCKET) {
         const nonBombKept = cands.filter(ids => {
           if (!ids) return true;
           const a = anaOfIds(hand, ids);
           if (a.type === C.TYPE.BOMB || a.type === C.TYPE.ROCKET) {
-            /* 炸完剩 ≤2 张(这手出完只余一手牌)才值得炸 */
-            return hand.length - ids.length <= 2;
+            /* 炸完剩 ≤2 张, 或剩牌一手就能走完(如 炸+三带) 才值得炸 */
+            const rest = hand.filter(c => !ids.includes(c.id));
+            return rest.length <= 2 || bestDecomp(rest).count <= 1;
           }
           return true;
         });
         /* 剔完还有非炸候选或 pass 就用剔后的; 全剔光就 pass */
         if (nonBombKept.length !== cands.length) {
           cands = nonBombKept.some(ids => ids !== null) ? nonBombKept : [null];
+        }
+      }
+    }
+
+    /* 农民拿炸/王炸压地主非临门牌同样浪费: r6513-2 步2 农民 10101010
+       炸地主开局的 56789 顺子(地主还剩15张), 后面牌权全丢.
+       规则: 地主 >4 张且这手 main < 2 且非炸弹时, 剔掉炸/王炸候选——
+       除非我炸完 ≤2 张快走完. (地主 ≤4 张不剔: 必须拦.) */
+    if (meFarmer && !lastFarmer) {
+      const lordLeft = room.players[room.landlordSeat].hand.length;
+      const la = lp.ana;
+
+      /* 地主 ≤3 张临门: 能压必压 (除非只能拆炸且这手很小).
+         MC 抽样队友暗牌后可能算出"队友会拦"的假安全——队友暗牌
+         未必接得住, 我手里有便宜压牌就该我上. r7975-2 步25: 地主
+         剩 3 张出 K, 队友有 A/2 却 pass 了. */
+      if (lordLeft <= 3) {
+        /* 找最便宜的非炸压牌 */
+        let cheap = null;
+        for (const ids of cands) {
+          if (!ids) continue;
+          const a = anaOfIds(hand, ids);
+          if (a.type === C.TYPE.BOMB || a.type === C.TYPE.ROCKET) continue;
+          const rest = hand.filter(c => !ids.includes(c.id));
+          const g0 = groupByVal(hand), g1 = groupByVal(rest);
+          let lost = 0;
+          for (const [v, cs] of g0) { const left = (g1.get(v) || []).length; if (cs.length >= 2 && left < cs.length && left < 2) lost++; }
+          const cost = a.main + lost * 15;
+          if (!cheap || cost < cheap.cost) cheap = { cost, ids, a };
+        }
+        if (cheap) return { type: 'play', ids: cheap.ids };
+        /* 只有炸能压: 不拦就输, 炸! (fin 已先检查过一把走完) */
+        if (cands.some(Boolean)) return { type: 'play', ids: cands.find(Boolean) };
+      }
+
+      /* 地主 >6 张时他的 2/王 也不值得炸——压了这张他还有一堆牌;
+         ≤6 张时保留炸 (必须拦) */
+      const veto = la.main < V2 || lordLeft > 6;
+      if (lordLeft > 4 && veto && la.type !== C.TYPE.BOMB && la.type !== C.TYPE.ROCKET) {
+        const kept = cands.filter(ids => {
+          if (!ids) return true;
+          const a = anaOfIds(hand, ids);
+          if (a.type === C.TYPE.BOMB || a.type === C.TYPE.ROCKET) {
+            const rest = hand.filter(c => !ids.includes(c.id));
+            return rest.length <= 2 || bestDecomp(rest).count <= 1;
+          }
+          return true;
+        });
+        if (kept.length !== cands.length) {
+          cands = kept.some(ids => ids !== null) ? kept : [null];
         }
       }
     }
@@ -1462,59 +1114,11 @@ function legendDecide(room, seat) {
 
 /* ---------- 总决策 ---------- */
 function decide(room, seat) {
-  const diff = DIFFS.includes(room.difficulty) ? room.difficulty : 'normal';
   const hand = room.players[seat].hand;
   if (room.phase === 'bidding') {
-    return { type: 'bid', bid: chooseBid(hand, room.currentBid, diff) };
+    return { type: 'bid', bid: chooseBid(hand, room.currentBid) };
   }
-  if (diff === 'legend') return legendDecide(room, seat);
-
-  const lp = room.lastPlay;
-  if (!lp || lp.seat === seat) {
-    /* 剩一手能出完直接走 (三带二/连对/飞机等非整炸牌型, cand 里可能没有) */
-    if (diffAtLeast(diff, 'hard')) {
-      const plan = bestDecomp(hand);
-      const fin = plan.moves.find(m => m.ids.length === hand.length);
-      if (fin) return { type: 'play', ids: fin.ids };
-    }
-    const ids = diff === 'expert' ? expertLead(hand, room, seat) : leadPlay(hand, room, seat, diff);
-    return { type: 'play', ids };
-  }
-
-  const lastAna = lp.ana;
-  let ids;
-  if (diff === 'expert') {
-    ids = pickBeat(hand, room, seat, lastAna);
-    if (ids && !expertShouldBeat(room, seat, hand, lastAna, ids)) return { type: 'pass' };
-    if (!ids) return { type: 'pass' };
-    return { type: 'play', ids };
-  }
-
-  ids = C.hintPlay(hand, lastAna);
-
-  /* 一把出完 (hint 只找同型最小牌, 可能漏了三带二/连对等收尾牌型) */
-  if (ids && ids.length === hand.length) return { type: 'play', ids };
-  if (!ids) {
-    const anaAll = C.analyze(hand);
-    if (anaAll.type !== C.TYPE.INVALID && C.canBeat(lastAna, anaAll)) {
-      return { type: 'play', ids: hand.map(c => c.id) };
-    }
-  }
-
-  /* hard: 若只能拆炸弹压, 但牌面不值得, 则保留炸弹让一手 */
-  if (ids && diffAtLeast(diff, 'hard')) {
-    const ana2 = anaOfIds(hand, ids);
-    const wasteBomb = (ana2.type === C.TYPE.BOMB || ana2.type === C.TYPE.ROCKET)
-      && lastAna.type !== C.TYPE.BOMB && lastAna.type !== C.TYPE.ROCKET
-      && hand.length > ids.length + 3 && playUnits(hand) > 2;
-    const lastFarmer = lp.seat !== room.landlordSeat;
-    const meFarmer = seat !== room.landlordSeat;
-    if (wasteBomb && !(meFarmer && !lastFarmer && room.players[room.landlordSeat].hand.length <= 3)) {
-      return { type: 'pass' };
-    }
-  }
-  if (!ids || !shouldBeat(room, seat, hand, lastAna, ids, diff)) return { type: 'pass' };
-  return { type: 'play', ids };
+  return legendDecide(room, seat);
 }
 
-module.exports = { decide, handScore, leadPlay, bestDecomp };
+module.exports = { decide, handScore, bestDecomp };

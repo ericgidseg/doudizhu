@@ -49,25 +49,10 @@ $('createBtn').onclick = () => {
   if (!name) return $('lobbyMsg').textContent = '请先输入昵称';
   send({ type: 'create', name });
 };
-$('soloBtn').onclick = () => {
-  const name = $('nameInput').value.trim() || '玩家' + Math.floor(Math.random() * 100);
-  send({ type: 'solo', name, diff: 'normal' });
-};
-$('soloHardBtn').onclick = () => {
-  const name = $('nameInput').value.trim() || '玩家' + Math.floor(Math.random() * 100);
-  send({ type: 'solo', name, diff: 'hard' });
-};
-$('soloExpertBtn').onclick = () => {
-  const name = $('nameInput').value.trim() || '玩家' + Math.floor(Math.random() * 100);
-  send({ type: 'solo', name, diff: 'expert' });
-};
 $('soloLegendBtn').onclick = () => {
   const name = $('nameInput').value.trim() || '玩家' + Math.floor(Math.random() * 100);
   send({ type: 'solo', name, diff: 'legend' });
 };
-document.querySelectorAll('.diff-btn').forEach(b => {
-  b.onclick = () => send({ type: 'setdiff', diff: b.dataset.d });
-});
 $('joinBtn').onclick = () => {
   const name = $('nameInput').value.trim();
   const rid = $('roomInput').value.trim();
@@ -178,10 +163,7 @@ function renderRoomWait(st) {
     ul.appendChild(li);
   }
   const amHost = S.mySeat === st.hostSeat;
-  const hasBot = st.players.some(p => p.bot);
   $('addBotBtn').classList.toggle('hidden', !(amHost && st.players.length < 3));
-  $('diffRow').classList.toggle('hidden', !(amHost && hasBot));
-  document.querySelectorAll('.diff-btn').forEach(b => b.classList.toggle('on', b.dataset.d === st.difficulty));
   $('startBtn').classList.toggle('hidden', !(amHost && st.players.length === 3));
   $('roomMsg').textContent = amHost
     ? (st.players.length === 3 ? '人齐了, 开始吧!' : `已有 ${st.players.length}/3 人`)
