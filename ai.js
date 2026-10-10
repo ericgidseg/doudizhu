@@ -1279,12 +1279,46 @@ function legendDecide(room, seat) {
     if (meFarmer && lastFarmer && room.players[lastSeat].hand.length <= 1) {
       return { type: 'pass' };
     }
-    /* 农民队友出了中小牌(main < K): 牌权已在农民方.
-       比较"压牌后我剩余手牌的完整结构数"——若最小压牌都要让我
-       失去对子/三张(r3894: 唯一的对QQ 压队友对77)或动 ≥A 大牌,
-       就是让队友继续更划算. 例外: 我能走完或地主临门. */
-    if (meFarmer && lastFarmer && lp.ana.main < V('K')) {
+    if (meFarmer && lastFarmer) {
       const lordLeft = room.players[room.landlordSeat].hand.length;
+
+      /* 队友的牌没人接得住, 让他站住(r6432 步12: 队友对KK 没人能压时
+         我对22 去压纯属内耗; 步24: 队友单2, 全场只剩大小王, 队友这张 2
+         已经封顶). 用记牌判断: lp.main 之上同点数在外还剩几张 + 更高
+         main 的同型组合是否还能拼出来. */
+      {
+        const un = unseenCounts(room, seat);
+        const la = lp.ana;
+        let canBeBeaten = false;
+        /* 同型更高组合是否可能存在于外面 (队友+地主):
+           单张/对子/三张/三带/四带 看 main 以上的点是否还够同型张数.
+           注意 un 是"除我以外"的牌, 队友自己的剩余手牌也在其中——他可能
+           持有更大的同型, 但那仍是"农民方胜", 地主压不了就不抢. */
+        const bodyNeed = { [C.TYPE.SINGLE]: 1, [C.TYPE.PAIR]: 2, [C.TYPE.TRIPLE]: 3, [C.TYPE.TRIPLE_1]: 3, [C.TYPE.TRIPLE_2]: 3, [C.TYPE.BOMB]: 4 }[la.type];
+        if (bodyNeed) {
+          /* 地主已 pass 过这手 -> 队友必赢, 不用算牌 */
+          if (room.passCount >= 1) {
+            canBeBeaten = false;
+          } else {
+            for (let v = la.main + 1; v < 15; v++) {
+              if (un[v] >= bodyNeed) { canBeBeaten = true; break; }
+            }
+          }
+        } else {
+          /* 顺子/连对/飞机/四带: 保守认为可能被压, 不用本规则 */
+          canBeBeaten = true;
+        }
+        /* 外面没有更高的同型, 也没有炸弹/王炸能压 -> 队友这手必胜, 绝不抢 */
+        if (!canBeBeaten) {
+          let bombOut = un[V('SJ')] === 1 && un[V('BJ')] === 1;
+          if (!bombOut) for (let v = 0; v < V2; v++) if (un[v] >= 4) { bombOut = true; break; }
+          if (!bombOut) return { type: 'pass' };
+        }
+      }
+
+      /* 队友出中小牌: 牌权已在农民方. 比较"压牌后我剩余手牌的完整结构数",
+         若最小压牌都要拆散结构(r3894: 唯一的对QQ 压队友对77)或动 ≥A 大牌,
+         就让队友继续. 例外: 我能走完或地主临门. */
       if (lordLeft > 3) {
         const countStructs = h => {
           const g = groupByVal(h);
@@ -1293,19 +1327,64 @@ function legendDecide(room, seat) {
           return n;
         };
         const myStructs = countStructs(hand);
-        let bestCheap = null;
-        for (const ids of cands) {
-          if (!ids) continue;
+        const nonBomb = cands.filter(ids => {
+          if (!ids) return false;
           const a = anaOfIds(hand, ids);
-          if (a.type === C.TYPE.BOMB || a.type === C.TYPE.ROCKET) continue;
+          return a.type !== C.TYPE.BOMB && a.type !== C.TYPE.ROCKET;
+        });
+        /* 弹药牌(main ≥ A: 单A/2/王, 对A/对2, 三张A…)是留着压地主大牌的,
+           花在队友身上内耗. 从候选中剔除(压这手能一次倒 ≥6 张的保留——
+           接近走完, 抢牌权连出更值), 剔完只剩 pass 就直接 pass. */
+        const culled = nonBomb.filter(ids => {
+          const a = anaOfIds(hand, ids);
+          if (a.main >= V('A') && ids.length <= 5) return false;
+          /* 同型大跳压(≤3 张的净牌: 对子/三张): 队友小三带/对子, 我高出
+             ≥3 级的同型留着压地主同型才值钱 (r6432 步3 QQQ 压 333). */
+          if (ids.length <= 3 && a.type === lp.ana.type && a.main - lp.ana.main >= 3) return false;
+          return true;
+        });
+        const kept = culled.concat(cands.filter(ids => ids === null));
+        if (!culled.length) return { type: 'pass' };
+        cands = kept;   /* 炸弹也一并拿掉: 炸队友几乎永远是浪费
+                           (要一把走完时 fin 已提前返回) */
+        /* 剩余最小压牌仍要拆散结构(失去 ≥2 个对子/三张)压中小牌 -> 让 */
+        let bestCheap = null;
+        for (const ids of culled) {
+          const a = anaOfIds(hand, ids);
           const rest = hand.filter(c => !ids.includes(c.id));
           const lostStructs = myStructs - countStructs(rest);
           const cost = a.main + lostStructs * 15;
           if (!bestCheap || cost < bestCheap.cost) bestCheap = { cost, main: a.main, lostStructs };
         }
-        /* lostStructs ≥2: 压牌拆散结构(如拆对子打单张/拆三张)才算真浪费;
-           出对子本身消耗1个对子是正常出牌, 不算. */
-        if (bestCheap && (bestCheap.lostStructs >= 2 || bestCheap.main >= V('A'))) {
+        if (bestCheap && lp.ana.main < V('K') && bestCheap.lostStructs >= 2) {
+          return { type: 'pass' };
+        }
+      }
+    }
+
+    /* 农民压地主的"过牌试探": 地主出最小的三带/对子(333/33x 之类),
+       我用 top 级同型(QQQ/AA 以上, 差 ≥6 级)去压, 是在浪费压地主大牌
+       的弹药——地主牌还多, 他大概率有 AAA/22 收走. r6432 步3: AI·乙
+       出 QQQ4 压地主 3334, 下轮地主 AAA5 直接收走, QQQ 白死.
+       例外: 我这手能走完 / 地主剩 ≤5 张(他快赢了必压) / 我牌多到
+       可以挥霍. */
+    if (meFarmer && !lastFarmer) {
+      const lordLeft = room.players[room.landlordSeat].hand.length;
+      const la = lp.ana;
+      const smallProbe = (la.type === C.TYPE.TRIPLE || la.type === C.TYPE.TRIPLE_1 || la.type === C.TYPE.TRIPLE_2 || la.type === C.TYPE.PAIR) && la.main <= V('7');
+      if (smallProbe && lordLeft > 5 && hand.length > 8) {
+        /* 我的最小同型压牌 main 是多少? 若最小压牌本身已经是"大牌
+           (≥Q, 差≥6 级)", 说明我手里没有便宜的对子/三张可出——硬压
+           等于烧弹药. 有便宜压牌时交给 MC 选择. */
+        let minSame = null;
+        for (const ids of cands) {
+          if (!ids) continue;
+          const a = anaOfIds(hand, ids);
+          if (a.type === C.TYPE.BOMB || a.type === C.TYPE.ROCKET) continue;
+          if (a.type !== la.type || a.main <= la.main) continue;
+          if (minSame === null || a.main < minSame) minSame = a.main;
+        }
+        if (minSame !== null && minSame - la.main >= 6 && minSame >= V('Q')) {
           return { type: 'pass' };
         }
       }
