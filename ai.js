@@ -1133,7 +1133,41 @@ function rollout(hands, landlordSeat, cur, lastAna, lastSeat, maxSteps) {
       return cur === landlordSeat ? 'lord' : 'farmer';
     }
     if (!lastAna || lastSeat === cur) {
-      const r = simLead(sim);
+      /* 农民领出: 队友只剩1-2张时优先喂小单/小对子让他接牌走完 */
+      let r = null;
+      if (cur !== landlordSeat) {
+        const mateSeat = 3 - cur - landlordSeat;
+        const mateLeft = hands[mateSeat].size;
+        if (mateLeft === 1 || mateLeft === 2) {
+          // 找最小单张(队友剩1)或最小对子(队友剩2)
+          const want = mateLeft === 1 ? 1 : 2;
+          const vals = [];
+          for (let v = 0; v < 15; v++) if (sim.cnt[v] > 0) vals.push(v);
+          for (const v of vals) {
+            if (want === 1 && sim.cnt[v] >= 1) {
+              sim.cnt[v]--; sim.size--;
+              r = { ana: { type: C.TYPE.SINGLE, main: v, len: 1 }, took: [{ v, n: 1 }] };
+              break;
+            }
+            if (want === 2 && sim.cnt[v] >= 2 && v < V('SJ')) {
+              sim.cnt[v] -= 2; sim.size -= 2;
+              r = { ana: { type: C.TYPE.PAIR, main: v, len: 2 }, took: [{ v, n: 2 }] };
+              break;
+            }
+          }
+          // 队友剩2但我没对子可喂 -> 退回喂单 (至少别出长牌卡他)
+          if (!r && mateLeft === 2) {
+            for (const v of vals) {
+              if (sim.cnt[v] >= 1) {
+                sim.cnt[v]--; sim.size--;
+                r = { ana: { type: C.TYPE.SINGLE, main: v, len: 1 }, took: [{ v, n: 1 }] };
+                break;
+              }
+            }
+          }
+        }
+      }
+      if (!r) r = simLead(sim);
       if (!r) return cur === landlordSeat ? 'lord' : 'farmer';
       lastAna = r.ana; lastSeat = cur; pass = 0;
       if (sim.size === 0) return cur === landlordSeat ? 'lord' : 'farmer';
@@ -1145,8 +1179,9 @@ function rollout(hands, landlordSeat, cur, lastAna, lastSeat, maxSteps) {
       const lordLeft = hands[landlordSeat].size;
       let tryBeat = true;
       if (!meLord && !lastLord) {
-        // 农民队友出的: 队友快走完或已是大牌则让
-        if (lastLeft <= 2 || (lastAna.type === C.TYPE.SINGLE && lastAna.main >= V('A')) ||
+        /* 农民队友临门(≤3张)或已出大牌/炸: 让队友走, 不抢牌权.
+           原来 lastLeft<=2, 队友剩3张(可能是三带/对+单)时也压就抢跑了. */
+        if (lastLeft <= 3 || (lastAna.type === C.TYPE.SINGLE && lastAna.main >= V('A')) ||
             lastAna.type === C.TYPE.ROCKET || lastAna.type === C.TYPE.BOMB) tryBeat = false;
       }
       if (!meLord && lastLord && lordLeft <= 2) tryBeat = true;   // 地主临门必压
@@ -1235,6 +1270,15 @@ function legendDecide(room, seat) {
     if (fin) return { type: 'play', ids: fin };
     cands.push(null);   // pass 也是候选
     if (!cands.length || (cands.length === 1 && cands[0] === null)) return { type: 'pass' };
+    /* 农民队友剩 1 张: 让他走完. MC 不知道队友手里是什么 (抽样按 unseen 均分),
+       会算出"我压大牌能赢"的假高胜率; 但队友这手出完就赢, 规则直接 veto.
+       剩 2-3 张时交给 MC 判断 (他可能还得再出几手). */
+    const lastSeat = lp.seat;
+    const meFarmer = seat !== room.landlordSeat;
+    const lastFarmer = lastSeat !== room.landlordSeat;
+    if (meFarmer && lastFarmer && room.players[lastSeat].hand.length <= 1) {
+      return { type: 'pass' };
+    }
   }
   // 剪枝: 候选太多时只保留有代表性的 (每种 type 取最小 + 最大 + 分解方案内)
   if (cands.length > 10) {
