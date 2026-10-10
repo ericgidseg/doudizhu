@@ -1279,6 +1279,37 @@ function legendDecide(room, seat) {
     if (meFarmer && lastFarmer && room.players[lastSeat].hand.length <= 1) {
       return { type: 'pass' };
     }
+    /* 农民队友出了中小牌(main < K): 牌权已在农民方.
+       比较"压牌后我剩余手牌的完整结构数"——若最小压牌都要让我
+       失去对子/三张(r3894: 唯一的对QQ 压队友对77)或动 ≥A 大牌,
+       就是让队友继续更划算. 例外: 我能走完或地主临门. */
+    if (meFarmer && lastFarmer && lp.ana.main < V('K')) {
+      const lordLeft = room.players[room.landlordSeat].hand.length;
+      if (lordLeft > 3) {
+        const countStructs = h => {
+          const g = groupByVal(h);
+          let n = 0;
+          for (const [, cs] of g) if (cs.length >= 2) n++;
+          return n;
+        };
+        const myStructs = countStructs(hand);
+        let bestCheap = null;
+        for (const ids of cands) {
+          if (!ids) continue;
+          const a = anaOfIds(hand, ids);
+          if (a.type === C.TYPE.BOMB || a.type === C.TYPE.ROCKET) continue;
+          const rest = hand.filter(c => !ids.includes(c.id));
+          const lostStructs = myStructs - countStructs(rest);
+          const cost = a.main + lostStructs * 15;
+          if (!bestCheap || cost < bestCheap.cost) bestCheap = { cost, main: a.main, lostStructs };
+        }
+        /* lostStructs ≥2: 压牌拆散结构(如拆对子打单张/拆三张)才算真浪费;
+           出对子本身消耗1个对子是正常出牌, 不算. */
+        if (bestCheap && (bestCheap.lostStructs >= 2 || bestCheap.main >= V('A'))) {
+          return { type: 'pass' };
+        }
+      }
+    }
   }
   // 剪枝: 候选太多时只保留有代表性的 (每种 type 取最小 + 最大 + 分解方案内)
   if (cands.length > 10) {
