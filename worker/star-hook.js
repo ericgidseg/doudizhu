@@ -12,8 +12,7 @@
  *        Content type: application/json
  *        Secret      : 上面的 WEBHOOK_SECRET
  *        Events      : 只选 "Watch" (即 star; 别选 star 仓库的其它事件)
- *   4. 以后任何人给仓库点 star, Worker 收到 webhook → 校验签名 → 调
- *      POST /repos/{repo}/dispatches {event_type:"star"} → 触发 release.yml 构建.
+ *   4. 只有仓库所有者(或 ALLOWED 白名单)点 star 才触发构建; 别人的 star 直接忽略.
  *
  * 防刷: 同一 starrer 60s 内多次 star/unstar 只算一次 (GitHub 也会重发, 这里再挡一层).
  */
@@ -43,6 +42,13 @@ export default {
 
     /* 只对 "新增 star" 触发; unstar 也发 webhook, 忽略 */
     if (action !== 'created') return new Response('ignored (not a star)', { status: 200 });
+
+    /* 白名单: 只有仓库所有者(或 ALLOWED 列表里的人)的 star 才触发构建 */
+    const allowed = (env.ALLOWED || (payload.repository && payload.repository.owner && payload.repository.owner.login) || '')
+      .split(',').map(s => s.trim()).filter(Boolean);
+    if (allowed.length && !allowed.includes(who)) {
+      return new Response(`ignored (${who} not in allowlist)`, { status: 200 });
+    }
 
     /* 冷却 */
     const now = Date.now();

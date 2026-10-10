@@ -1,6 +1,6 @@
 # Star → 自动构建 触发器
 
-任何人在 GitHub 仓库页点 ⭐，Cloudflare Worker 收到 webhook 后调 `repository_dispatch`，触发 `release.yml` 在 macOS runner 上打包 `斗地主.app` 并发新 Release。
+你在 GitHub 仓库页点 ⭐（star/unstar 都行，只有 `action:created` 即"点成星"才算），Cloudflare Worker 收到 webhook 后调 `repository_dispatch`，触发 `release.yml` 在 macOS runner 上打包 `斗地主.app` 并发新 Release。**白名单限制：只有仓库所有者（默认）或 `ALLOWED` 变量里列出的 GitHub 登录名的 star 才触发，别人的 star 一律忽略。**
 
 ## 部署（一次性，约 5 分钟）
 
@@ -17,6 +17,7 @@ Worker 页 → **Settings** → **Variables and Secrets** → **Add**：
 | `GH_TOKEN` | GitHub Personal Access Token (classic)，勾选 `repo` + `workflow` 两个 scope |
 | `WEBHOOK_SECRET` | 随便一串长随机字符串（下面 GitHub webhook 也要填同一个） |
 | `GH_REPO` | `你的用户名/doudizhu`（可选，默认取 payload 里的仓库名） |
+| `ALLOWED` | 逗号分隔的 GitHub 登录名白名单（可选，默认只放行仓库所有者） |
 
 ### 3. GitHub 仓库配 webhook
 仓库 → **Settings** → **Webhooks** → **Add webhook**：
