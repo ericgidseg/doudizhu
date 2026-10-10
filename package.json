@@ -1,0 +1,10 @@
+{
+  "name": "doudizhu-lan",
+  "version": "1.0.0",
+  "description": "斗地主 - 局域网三人对战, 零依赖 Node.js 服务端",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,12 @@
+{
+  "main": "bundle.js",
+  "output": "sea-prep.blob",
+  "disableExperimentalSEAWarning": true,
+  "useCodeCache": false,
+  "assets": {
+    "public/index.html": "public/index.html",
+    "public/style.css": "public/style.css",
+    "public/client.js": "public/client.js",
+    "public/replay.html": "public/replay.html"
+  }
+}
