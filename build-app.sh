@@ -86,16 +86,18 @@ LAUNCH
 chmod +x "$DIST/$APP/Contents/MacOS/launcher"
 
 # ---------- 4. 顺手产出 zip 便于分发 ----------
+# zip 文件名用 ASCII, 避免 GitHub Release 清洗中文名
+ZIPNAME="doudizhu.app.zip"
 cd "$DIST"
-rm -f "$APP.zip"
-ditto -c -k --sequesterRsrc --keepParent "$APP" "$APP.zip"
+rm -f "$ZIPNAME"
+ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIPNAME"
 cd ..
 
 rm -f bundle.js make-bundle.js
 echo ""
 echo "✅ 打包完成:"
 echo "   $DIST/$APP        ($(du -sh "$DIST/$APP" | cut -f1))  <- 双击直接用"
-echo "   $DIST/$APP.zip    ($(du -sh "$DIST/$APP.zip" | cut -f1))  <- 拷给同事解压即用"
+echo "   $DIST/$ZIPNAME    ($(du -sh "$DIST/$ZIPNAME" | cut -f1))  <- 拷给同事解压即用"
 echo ""
 echo "同事首次双击可能被 Gatekeeper 拦 (未签名), 让他:"
 echo "   右键 .app → 打开 → 打开   (一次以后即可)"

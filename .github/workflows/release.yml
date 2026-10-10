@@ -31,7 +31,7 @@ jobs:
           ls -lh dist/
           test -f "dist/斗地主.app/Contents/MacOS/launcher"
           test -f "dist/斗地主.app/Contents/Resources/node"
-          test -f "dist/斗地主.app.zip"
+          test -f "dist/doudizhu.app.zip"
           file "dist/斗地主.app/Contents/Resources/node"
 
       - name: Create Release & upload zip
@@ -42,12 +42,12 @@ jobs:
           body: |
             macOS Apple Silicon (arm64) 一键包.
 
-            **用法**: 下载 `斗地主.app.zip` → 解压 → 双击 `斗地主.app`.
+            **用法**: 下载 `doudizhu.app.zip` → 解压 → 双击 `斗地主.app`.
             首次打开如被 Gatekeeper 拦: 右键 → 打开 → 打开.
             启动后终端窗口保持开着, 浏览器打开打印的内网地址即可开局.
 
             源码版: clone 本仓库后 `node server.js`.
-          files: dist/斗地主.app.zip
+          files: dist/doudizhu.app.zip
           draft: false
           prerelease: false
           fail_on_unmatched_files: true
