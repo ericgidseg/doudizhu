@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '版本号 (如 v1.0.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    runs-on: macos-14          # Apple Silicon runner, 打 arm64 包
+    steps:
+      - uses: actions/checkout@v4
+
+      # runner 自带 node (arm64). 确认版本够用 (SEA 不需要, 只要 >=16).
+      - name: Node version
+        run: node -v && file "$(command -v node)"
+
+      - name: Build .app
+        run: ./build-app.sh
+
+      - name: Verify artifact
+        run: |
+          ls -lh dist/
+          test -f "dist/斗地主.app/Contents/MacOS/launcher"
+          test -f "dist/斗地主.app/Contents/Resources/node"
+          test -f "dist/斗地主.app.zip"
+          file "dist/斗地主.app/Contents/Resources/node"
+
+      - name: Create Release & upload zip
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: 斗地主 ${{ github.event.inputs.tag || github.ref_name }}
+          body: |
+            macOS Apple Silicon (arm64) 一键包.
+
+            **用法**: 下载 `斗地主.app.zip` → 解压 → 双击 `斗地主.app`.
+            首次打开如被 Gatekeeper 拦: 右键 → 打开 → 打开.
+            启动后终端窗口保持开着, 浏览器打开打印的内网地址即可开局.
+
+            源码版: clone 本仓库后 `node server.js`.
+          files: dist/斗地主.app.zip
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
