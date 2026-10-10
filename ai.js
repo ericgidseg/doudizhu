@@ -1389,6 +1389,32 @@ function legendDecide(room, seat) {
         }
       }
     }
+
+    /* 地主用炸/王炸压农民非临门牌: MC 的 rollout 快棋看不出"炸留到
+       残局才值钱", 会把炸当普通大牌算胜率. r9662-3 步4: 地主王炸压
+       农民 JJJ5(他还剩13张), 下轮自己只出个 9, 炸白烧.
+       规则: 被压的农民 > 4 张(不会下轮走完)且这手 main < 2(不是 2/王
+       级必压大牌)时, 把炸/王炸从候选剔除——除非我炸完手里 ≤2 张
+       (即将走完)或农民已经 ≤4 张必须拦. */
+    if (!meFarmer) {
+      const lastLeft = room.players[lastSeat].hand.length;
+      const la = lp.ana;
+      if (lastLeft > 4 && la.main < V2 && la.type !== C.TYPE.BOMB && la.type !== C.TYPE.ROCKET) {
+        const nonBombKept = cands.filter(ids => {
+          if (!ids) return true;
+          const a = anaOfIds(hand, ids);
+          if (a.type === C.TYPE.BOMB || a.type === C.TYPE.ROCKET) {
+            /* 炸完剩 ≤2 张(这手出完只余一手牌)才值得炸 */
+            return hand.length - ids.length <= 2;
+          }
+          return true;
+        });
+        /* 剔完还有非炸候选或 pass 就用剔后的; 全剔光就 pass */
+        if (nonBombKept.length !== cands.length) {
+          cands = nonBombKept.some(ids => ids !== null) ? nonBombKept : [null];
+        }
+      }
+    }
   }
   // 剪枝: 候选太多时只保留有代表性的 (每种 type 取最小 + 最大 + 分解方案内)
   if (cands.length > 10) {
