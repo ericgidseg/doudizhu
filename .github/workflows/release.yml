@@ -3,8 +3,6 @@ name: Release
 on:
   push:
     tags: ['v*']
-  repository_dispatch:
-    types: [star]              # 由 star-webhook Worker 触发
   workflow_dispatch:
     inputs:
       tag:
@@ -15,33 +13,19 @@ on:
 permissions:
   contents: write
 
-concurrency:
-  group: release-build
-  cancel-in-progress: false    # star 触发密集时排队不取消, 但同组串行防刷屏
-
 jobs:
   build-macos:
     runs-on: macos-14          # Apple Silicon runner, 打 arm64 包
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0         # 需要全部 tag 来推版本号
 
-      # star 触发时自动算版本: 读最新 tag, 次版本号 +1
       - name: Resolve tag
         id: tag
         run: |
           if [ "${{ github.event_name }}" = "push" ]; then
             echo "value=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
-          elif [ -n "${{ github.event.inputs.tag }}" ]; then
-            echo "value=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
           else
-            # star / 无输入 -> latest tag 次版本 +1
-            git fetch --tags --force >/dev/null 2>&1 || true
-            LATEST=$(git tag -l 'v*' | sort -V | tail -1)
-            LATEST=${LATEST:-v0.0.0}
-            IFS=. read -r MA MI PA <<< "${LATEST#v}"
-            echo "value=v${MA}.$((MI+1)).0" >> "$GITHUB_OUTPUT"
+            echo "value=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
           fi
 
       # runner 自带 node (arm64). 确认版本够用 (SEA 不需要, 只要 >=16).
