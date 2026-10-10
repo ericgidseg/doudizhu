@@ -1264,6 +1264,23 @@ function legendDecide(room, seat) {
     // 出完校验
     const fin = cands.find(ids => ids.length === hand.length);
     if (fin) return { type: 'play', ids: fin };
+    /* 2/王是"每张都能稳拿一次牌权"的控制牌. 手牌还很散(分解手数多,
+       后面必然要靠 2/王 收回牌权)时, 一手牌里塞 >=2 张 2 属于把多张
+       保险一次烧掉 (r5389-3: 地主开局 2224, 之后满手散牌再没拿过
+       牌权). 手数 ≤4(接近走完, 需要快速倒牌)或这是唯一候选时豁免. */
+    if (plan.count > 4) {
+      const kept = cands.filter(ids => {
+        const g = groupByVal(hand);
+        let twos = 0, jokers = 0;
+        for (const id of ids) {
+          const v = V(cardById(hand, id).rank);
+          if (v === V2) twos++;
+          if (v === V('SJ') || v === V('BJ')) jokers++;
+        }
+        return twos < 2 && jokers < 2;
+      });
+      if (kept.length) cands = kept;
+    }
   } else {
     cands = beatCandidates(hand, lp.ana);
     const fin = cands.find(ids => ids.length === hand.length);
