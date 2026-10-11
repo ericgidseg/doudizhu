@@ -130,12 +130,23 @@ function analyze(cards) {
     return ok(TYPE.AIRPLANE, keys[keys.length - 1]);
   }
   // 飞机带翅膀: 连续三张 m 组 + m 张单 / m 对
-  if (tripleVals.length >= 2 && isConsecutive(tripleVals) && tripleVals[tripleVals.length - 1] < V2) {
-    const m = tripleVals.length;
-    const rest = keys.filter(k => !tripleVals.includes(k));
-    const restCount = rest.reduce((s, k) => s + g.get(k).length, 0);
-    if (restCount === m) return ok(TYPE.AIRPLANE_1, tripleVals[m - 1]);
-    if (rest.length === m && rest.every(k => g.get(k).length === 2)) return ok(TYPE.AIRPLANE_2, tripleVals[m - 1]);
+  /* 翅膀自身可能是三张同点 (如 333777888999 = 飞机 777888999 带 333),
+     所以不能只认"全部三张都连续". 枚举连续三张段作为主体, 剩下的
+     牌只要凑够 m 张单 (且不含王炸歧义) 或 m 对就算飞机带牌. */
+  {
+    const cand = tripleVals.filter(v => v < V2);
+    for (let end = 0; end < cand.length; end++) {
+      for (let start = end - 1; start >= 0; start--) {
+        const seg = cand.slice(start, end + 1);
+        if (!isConsecutive(seg)) break;            // 段不连续, 再往前也不会连续
+        const m = seg.length;
+        if (m < 2) continue;
+        const rest = keys.filter(k => !seg.includes(k));
+        const restCount = rest.reduce((s, k) => s + g.get(k).length, 0);
+        if (restCount === m) return ok(TYPE.AIRPLANE_1, seg[m - 1]);
+        if (rest.length === m && rest.every(k => g.get(k).length === 2)) return ok(TYPE.AIRPLANE_2, seg[m - 1]);
+      }
+    }
   }
   return bad;
 }
