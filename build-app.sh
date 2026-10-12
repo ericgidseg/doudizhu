@@ -85,7 +85,13 @@ exec "$RES/node" "$RES/bundle.js" "$PORT"
 LAUNCH
 chmod +x "$DIST/$APP/Contents/MacOS/launcher"
 
-# ---------- 4. 顺手产出 zip 便于分发 ----------
+# ---------- 4. ad-hoc 签名 ----------
+# macOS 对完全未签名的二进制会直接 SIGKILL ("代码签名无效"对话框,
+# 提示联系开发者重新安装). ad-hoc 签名不解决公证, 但让本机直接双击可用.
+codesign --force --deep --sign - "$DIST/$APP"
+codesign --verify --strict "$DIST/$APP"
+
+# ---------- 5. 顺手产出 zip 便于分发 ----------
 # zip 文件名用 ASCII, 避免 GitHub Release 清洗中文名
 ZIPNAME="doudizhu.app.zip"
 cd "$DIST"
