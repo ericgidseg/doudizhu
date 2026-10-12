@@ -7,7 +7,7 @@ cd "$(dirname "$0")"
 APP="${1:-斗地主.app}"
 DIST="dist"
 NODE_BIN="$(command -v node)"
-echo "使用 Node: $NODE_BIN ($(node -v))"
+echo "构建用 Node: $NODE_BIN ($(node -v))"
 
 # ---------- 1. 单文件 bundle (内联本地 require) ----------
 cat > make-bundle.js <<'EOF'
@@ -49,16 +49,22 @@ cat > "$DIST/$APP/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-# node 运行时 + 全部依赖库 (递归收集, 路径改写为 @loader_path,
-# 让 app 自包含 —— 只拷 libnode 的话, 没装相同版本 Homebrew 库的
-# 机器上 dyld 会因 "Library not loaded: .../libsimdjson..." 直接杀进程)
-REAL_NODE="$(realpath "$NODE_BIN")"
-LIBDIR="$(dirname "$REAL_NODE")/../lib"
-tools/vendor_dylibs.sh "$REAL_NODE" "$LIBDIR" "$DIST/$APP/Contents/Resources"
+# 运行时用官方静态 Node: 只依赖系统框架, 自包含; strip 调试符号后
+# ~85MB. 不用本机 Homebrew 版 —— 它链接近百个第三方库, 他机缺库会
+# 在启动瞬间被 dyld 杀掉 ("Library not loaded: .../libsimdjson...").
+RUNTIME_NODE="$(tools/fetch_node.sh)"
+echo "运行时 Node: $RUNTIME_NODE ($("$RUNTIME_NODE" -v))"
+cp "$RUNTIME_NODE" "$DIST/$APP/Contents/Resources/node"
+chmod +x "$DIST/$APP/Contents/Resources/node"
 
 # 代码 + 静态资源
 cp bundle.js "$DIST/$APP/Contents/Resources/"
 cp -r public "$DIST/$APP/Contents/Resources/public"
+# node 启动 .js 入口时会向上逐级查找 package.json 判断模块格式; 若
+# 在仓库目录树里双击, 会读到 app bundle 外的仓库 package.json ——
+# Desktop 下这类读取会被 macOS TCC 隐私拦截, 进程直接挂起 (实测
+# 卡在 read 系统调用). 就近放一个显式声明, node 找到即停.
+printf '{"type":"commonjs"}\n' > "$DIST/$APP/Contents/Resources/package.json"
 
 # ---------- 3. 启动器 (打开终端跑服务, 关窗口即退出) ----------
 cat > "$DIST/$APP/Contents/MacOS/launcher" <<'LAUNCH'

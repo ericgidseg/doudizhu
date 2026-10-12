@@ -34,7 +34,8 @@ node server.js 9000     # 指定其它端口
 要求：Node.js ≥ 16（推荐 18+），无其它依赖。
 
 #### .app 分发说明
-- `./build-app.sh` 生成 `dist/斗地主.app`（58MB）和 `dist/斗地主.app.zip`（18MB）
+- `./build-app.sh` 生成 `dist/斗地主.app`（85MB）和 `dist/斗地主.app.zip`（32MB）
+- 运行时用官方静态 Node（`tools/fetch_node.sh` 自动下载并校验，缓存在 `.cache/`），只依赖 macOS 系统框架，拷到任何 Apple Silicon Mac 都能直接跑
 - 目前只支持 **Apple Silicon Mac**（arm64）；Intel Mac 或 Windows 需要在那台机器上跑 `node server.js` 或另行打包
 - 同事首次打开会被 Gatekeeper 拦：右键 .app → **打开** → 再点 **打开**，之后正常双击
 - .app 启动后 replays 持久化在 `~/Library/Application Support/doudizhu/replays/`

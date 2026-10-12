@@ -5,7 +5,7 @@ set -e
 cd "$(dirname "$0")"
 OUT="${1:-斗地主.command}"
 NODE_BIN="$(command -v node)"
-echo "使用 Node: $NODE_BIN ($(node -v))"
+echo "构建用 Node: $NODE_BIN ($(node -v))"
 
 # 1. 生成单文件 bundle (本地 require 内联)
 cat > make-bundle.js <<'EOF'
@@ -28,13 +28,15 @@ node --check bundle.js
 
 # 2. 打包 payload: node 二进制 + 动态库 + bundle + public/
 rm -rf .pkg && mkdir -p .pkg
-# node 若为动态链接, 递归收集全部依赖库并改写为 @loader_path
-# (Homebrew node 链接了 simdjson/abseil 等十几库, 只带 libnode 会在
-# 没装相同版本 Homebrew 库的机器上启动即崩)
-LIBDIR="$(dirname "$REAL_NODE")/../lib"
-REAL_NODE="$(realpath "$NODE_BIN")"
-LIBDIR="$(dirname "$REAL_NODE")/../lib"
-tools/vendor_dylibs.sh "$REAL_NODE" "$LIBDIR" .pkg
+# 运行时用官方静态 Node: 只依赖系统框架, 自包含; strip 后 ~85MB.
+# 不用本机 Homebrew 版 —— 它链接近百个第三方库, 他机缺库会启动即崩.
+RUNTIME_NODE="$(tools/fetch_node.sh)"
+cp "$RUNTIME_NODE" .pkg/node
+chmod +x .pkg/node
+# node 会从入口脚本向上逐级找 package.json 判断模块格式; 解压目录在
+# /tmp 下一般没事, 但就近放一个显式声明, 避免将来解压位置踩到祖先目录
+# 里存在 package.json 的情况.
+printf '{"type":"commonjs"}\n' > .pkg/package.json
 cp bundle.js .pkg/
 cp -r public .pkg/
 PAYLOAD=$(mktemp)

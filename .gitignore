@@ -1,6 +1,7 @@
 replays/
 node_modules/
 dist/
+.cache/
 *.command
 .DS_Store
 pkg/
