@@ -28,14 +28,13 @@ node --check bundle.js
 
 # 2. 打包 payload: node 二进制 + 动态库 + bundle + public/
 rm -rf .pkg && mkdir -p .pkg
-REAL_NODE="$(realpath "$NODE_BIN")"
-cp -L "$NODE_BIN" .pkg/node
-chmod +x .pkg/node
-# node 若为动态链接, 带上 libnode.dylib (macOS Homebrew 编译版常见)
+# node 若为动态链接, 递归收集全部依赖库并改写为 @loader_path
+# (Homebrew node 链接了 simdjson/abseil 等十几库, 只带 libnode 会在
+# 没装相同版本 Homebrew 库的机器上启动即崩)
 LIBDIR="$(dirname "$REAL_NODE")/../lib"
-for lib in "$LIBDIR"/libnode*.dylib; do
-  [ -e "$lib" ] && cp -L "$lib" .pkg/ && echo "  打包库: $(basename "$lib")"
-done
+REAL_NODE="$(realpath "$NODE_BIN")"
+LIBDIR="$(dirname "$REAL_NODE")/../lib"
+tools/vendor_dylibs.sh "$REAL_NODE" "$LIBDIR" .pkg
 cp bundle.js .pkg/
 cp -r public .pkg/
 PAYLOAD=$(mktemp)
@@ -53,14 +52,21 @@ tail -n +$ARCHIVE_LINE "$0" | tar -xzf - -C "$DIR" 2>/dev/null || {
   tail -n +$ARCHIVE_LINE "$0" | tar -xz -C "$DIR"
 }
 cd "$DIR"
-export DYLD_LIBRARY_PATH="$DIR:$DIR/../lib:${DYLD_LIBRARY_PATH}"
 clear
 echo "  ┌─────────────────────────────────────┐"
 echo "  │      斗 地 主 · 内 网 对 战           │"
 echo "  │   把这个窗口开着, 同事就能加入        │"
 echo "  └─────────────────────────────────────┘"
 echo ""
-./node bundle.js "$PORT"
+./node bundle.js "$PORT" &
+NODE_PID=$!
+printf '启动中'
+while ! curl -s -o /dev/null --max-time 1 "http://localhost:$PORT/" 2>/dev/null; do
+  kill -0 "$NODE_PID" 2>/dev/null || { echo; echo "服务启动失败"; exit 1; }
+  printf '.'; sleep 1
+done
+echo
+wait "$NODE_PID"
 # 退出时自动清理
 rm -rf "$DIR"
 exit

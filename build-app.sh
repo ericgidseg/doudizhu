@@ -49,14 +49,12 @@ cat > "$DIST/$APP/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-# node 运行时 + 依赖库
+# node 运行时 + 全部依赖库 (递归收集, 路径改写为 @loader_path,
+# 让 app 自包含 —— 只拷 libnode 的话, 没装相同版本 Homebrew 库的
+# 机器上 dyld 会因 "Library not loaded: .../libsimdjson..." 直接杀进程)
 REAL_NODE="$(realpath "$NODE_BIN")"
-cp -L "$REAL_NODE" "$DIST/$APP/Contents/Resources/node"
-chmod +x "$DIST/$APP/Contents/Resources/node"
 LIBDIR="$(dirname "$REAL_NODE")/../lib"
-for lib in "$LIBDIR"/libnode*.dylib; do
-  [ -e "$lib" ] && cp -L "$lib" "$DIST/$APP/Contents/Resources/" && echo "  带库: $(basename "$lib")"
-done
+tools/vendor_dylibs.sh "$REAL_NODE" "$LIBDIR" "$DIST/$APP/Contents/Resources"
 
 # 代码 + 静态资源
 cp bundle.js "$DIST/$APP/Contents/Resources/"
@@ -67,7 +65,6 @@ cat > "$DIST/$APP/Contents/MacOS/launcher" <<'LAUNCH'
 #!/usr/bin/env bash
 # .app 双击入口: 切到 Resources 起 node 服务, replays 写到 ~/Library/Application Support
 RES="$(cd "$(dirname "$0")/../Resources" && pwd)"
-export DYLD_LIBRARY_PATH="$RES:${DYLD_LIBRARY_PATH}"
 export DDZ_REPLAY_DIR="$HOME/Library/Application Support/doudizhu/replays"
 mkdir -p "$DDZ_REPLAY_DIR"
 PORT="${DDZ_PORT:-8000}"
