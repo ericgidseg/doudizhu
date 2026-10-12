@@ -125,13 +125,20 @@ function enumCombos(hand) {
  * 结果: { moves: [{typeName, ids, isBomb}], cost }
  * DP: cnt[15] 每点剩余张数, bombFlag 是否已拆炸弹点数.
  */
-function bestDecomp(hand) {
+/**
+ * opts.breakBombs: 强制把炸弹拆成普通结构 (不生成炸弹/王炸分支, 也不
+ * 惩罚拆炸). 用于给 MC 提供"拆炸换结构"的备选分解方案 —— 默认方案
+ * 总是保炸, MC 无从比较两者谁更值.
+ */
+function bestDecomp(hand, opts) {
+  const breakBombs = !!(opts && opts.breakBombs);
+  const budget = (opts && opts.budget) || 120;
   const g = groupByVal(hand);
   const cnt = new Array(15).fill(0);
   for (const v of g.keys()) cnt[v] = g.get(v).length;
   const cardPool = new Map();  // v -> [card...]
   for (const [v, cs] of g) cardPool.set(v, cs.slice());
-  const rocket = cnt[V('SJ')] > 0 && cnt[V('BJ')] > 0;
+  const rocket = !breakBombs && cnt[V('SJ')] > 0 && cnt[V('BJ')] > 0;
 
   const combos = enumCombos(hand).map(co => ({
     ...co,
@@ -154,7 +161,7 @@ function bestDecomp(hand) {
     for (const v of origBombs) if (cntArr[v] === 4) bl++;
     return cntArr.join(',') + '|' + bf + '|' + bl;
   };
-  const deadline = Date.now() + 120;           // 单局决策 ≤120ms
+  const deadline = Date.now() + budget;        // 单局决策 ≤120ms
   let states = 0;
   const MAX_STATES = 40000;
   let aborted = false;
@@ -178,7 +185,7 @@ function bestDecomp(hand) {
        先递归它能把"留炸"的子树最优解先算出来缓存; 放最后的话前面
        combo 递归吃掉大量状态数, bomb 子树容易撞上 abort 阈值被丢
        (r4446-1: bomb v=3 的 sub 返回 moves:null 被 tryMove 丢弃). */
-    for (let v = 0; v < 15; v++) {
+    for (let v = 0; !breakBombs && v < 15; v++) {
       if (cntArr[v] === 4) {
         const next = cntArr.slice(); next[v] = 0;
         tryMove(-30, next, bf, { bomb: v });   // 炸弹白赚 30 分
@@ -197,9 +204,11 @@ function bestDecomp(hand) {
          666 三带一, 顺子先用一张 6, 三带一再用 3 张——两层都该罚.
          整炸走 bomb 分支 (cost -30) 不受此罚. */
       let bombPenalty = 0;
-      for (const t of co.takes) {
-        if (cardPool.get(t.v).length === 4 && t.take < 4) {
-          bombPenalty += 120;
+      if (!breakBombs) {
+        for (const t of co.takes) {
+          if (cardPool.get(t.v).length === 4 && t.take < 4) {
+            bombPenalty += 120;
+          }
         }
       }
       /* 封顶牌惩罚: 主体每消耗一张 >=2 的牌, 等于烧掉一次未来的
@@ -1041,6 +1050,21 @@ function legendDecide(room, seat) {
     // 领牌: 分解方案中的每手 + 基础领牌候选
     const plan = bestDecomp(hand);
     cands = plan.moves.map(m => m.ids);
+    /* 保炸分解只看得到"炸弹留着"的世界; 手牌含炸弹时再算一套"拆炸"
+       分解, 把拆炸换来的顺子/三张也交给 MC 评估 (r3263-4: 4444 拆成
+       4 + 56789 顺子 + 88 + 9, 比 4444 领出更值).
+       只在"炸弹是控制牌"(炸完剩余 ≤2 手)时注入: 手牌散、炸弹只是普通
+       甩牌时注入拆炸候选会诱导 AI 白白拆炸 (实测宽版 400 副牌 -2.8σ). */
+    if (plan.moves.some(m => m.isBomb)) {
+      const bombIds = plan.moves.filter(m => m.isBomb).flatMap(m => m.ids);
+      const rest = hand.filter(c => !bombIds.includes(c.id));
+      if (rest.length <= 2 || bestDecomp(rest).count <= 2) {
+        for (const m of bestDecomp(hand, { breakBombs: true, budget: 60 }).moves) {
+          const k = m.ids.slice().sort((a, b) => a - b).join(',');
+          if (!cands.some(x => x.slice().sort((a, b) => a - b).join(',') === k)) cands.push(m.ids);
+        }
+      }
+    }
     for (const ids of leadCandidates(hand, false)) {
       const k = ids.slice().sort((a, b) => a - b).join(',');
       if (!cands.some(x => x.slice().sort((a, b) => a - b).join(',') === k)) cands.push(ids);
@@ -1119,10 +1143,48 @@ function legendDecide(room, seat) {
         if (kept.length) cands = kept;
       }
     }
-    /* 2/王是"每张都能稳拿一次牌权"的控制牌. 手牌还很散(分解手数多,
-       后面必然要靠 2/王 收回牌权)时, 一手牌里塞 >=2 张 2 属于把多张
-       保险一次烧掉 (r5389-3: 地主开局 2224, 之后满手散牌再没拿过
-       牌权). 手数 ≤4(接近走完, 需要快速倒牌)或这是唯一候选时豁免. */
+    /* 2/王是"每张都能稳拿一次牌权"的控制牌:
+       ①一手牌里塞 >=2 张 2/王 = 一次烧掉多次保险 (r5389-3: 地主开局
+         2224, 之后满手散牌再没拿过牌权); 手数 ≤4 时豁免 (要快速倒牌).
+       ②单张 2/王 领出也一样: 手牌还多 (>6 张) 且分解手数多 (>4 手) 时
+         领单张 2/王 = 白送一次牌权, 后面照样要靠它收牌.
+         实测人类玩家 185 次领出中 0 次这么做, AI 100 副牌出现 3 次. */
+    {
+      const kept = cands.filter(ids => {
+        if (!ids || ids.length !== 1) return true;
+        const v = V(cardById(hand, ids[0]).rank);
+        if (v < V2) return true;                    // 只针对 2/小王/大王
+        return hand.length <= 6 || plan.count <= 4; // 残局/快走完时保留
+      });
+      if (kept.length) cands = kept;
+    }
+    /* 领出时别把炸弹当普通牌甩: 炸弹的唯一价值是"随时收回牌权 + 终结",
+       先甩出去等于把保险烧掉, 后面再被压就彻底没牌权了.
+       r3263-4 步20: 农民 AI·丙 4444+56789+8 领炸 → 顺子 → 剩单8 被地主
+       王炸接管翻盘; 正确是领 8, 地主压, 我炸掉后顺子走完.
+       更严重的是开局甩炸 (20 张牌领炸, 实测 100 副牌出现 6 次).
+       只在两种情况保留领炸候选:
+         ①炸完手里 ≤2 张 (炸弹 + 一手, 就是终结牌);
+         ②剩下的牌全是炸弹 (每手都得是炸, 不存在"留着收牌权"的选项).
+       其余情况剔掉; 剔完没候选时保留原样, 不会无牌可出. */
+    {
+      const kept = cands.filter(ids => {
+        if (!ids) return true;
+        const a = anaOfIds(hand, ids);
+        if (a.type !== C.TYPE.BOMB && a.type !== C.TYPE.ROCKET) return true;
+        const rest = hand.filter(c => !ids.includes(c.id));
+        if (rest.length <= 2) return true;            // 炸完就走完/剩一张
+        const g = groupByVal(rest);                   // 剩牌全是炸弹 -> 只能炸
+        let allBombs = true, jokers = 0;
+        for (const [v, cs] of g) {
+          if (cs.length === 4) continue;
+          if (cs.length === 1 && (v === V('SJ') || v === V('BJ'))) { jokers++; continue; }
+          allBombs = false; break;
+        }
+        return allBombs && (jokers === 0 || jokers === 2);
+      });
+      if (kept.length) cands = kept;
+    }
     if (plan.count > 4) {
       const kept = cands.filter(ids => {
         const g = groupByVal(hand);
@@ -1576,6 +1638,16 @@ function legendDecide(room, seat) {
     ranked.sort((x, y) => y.w - x.w);
   }
   const bestIds = ranked.length ? ranked[0].ids : cands[0];
+  /* AI_DEBUG=1 时把候选与 MC 胜率打到 stderr (分析用, 不影响决策) */
+  if (process.env.AI_DEBUG) {
+    const rows = ranked.map(r => ({
+      w: r.w.toFixed(3), n: r.n,
+      play: r.ids ? anaOfIds(hand, r.ids).typeName + ' ' + anaOfIds(hand, r.ids).main : 'pass',
+      cards: r.ids ? C.sortCards(hand.filter(c => r.ids.includes(c.id))).map(c => c.rank).join(' ') : '',
+    }));
+    console.error('[AI_DEBUG] seat', seat, 'hand', C.sortCards(hand).map(c => c.rank).join(' '),
+      'lead', leading, 'last', lp ? lp.ana.typeName : '-', '\n' + rows.map(r => JSON.stringify(r)).join('\n'));
+  }
   if (bestIds === null) return { type: 'pass' };
   return { type: 'play', ids: bestIds };
 }

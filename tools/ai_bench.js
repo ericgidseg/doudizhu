@@ -11,18 +11,9 @@
  */
 const path = require('path');
 const C = require(path.join(__dirname, '..', 'cards.js'));
-const AI = {
-  new: require(path.join(__dirname, '..', 'ai.js')),
-  baseline: require(path.join(__dirname, '..', 'ai_baseline.js')),
-};
-function loadAI(spec) {
-  if (AI[spec]) return AI[spec];
-  if (/[\\/]/.test(spec) || spec.endsWith('.js')) {
-    const p = path.isAbsolute(spec) ? spec : path.resolve(process.cwd(), spec);
-    return require(p);
-  }
-  return null;
-}
+/* 归档/快照文件可能放在任意目录, _load_ai 统一把它们的 require('./cards.js')
+   指向项目根, 让任意位置的 AI 文件都能直接加载. */
+const { loadAI } = require(path.join(__dirname, '_load_ai.js'));
 
 function mkRoom(hands, lord, bottom) {
   return {
