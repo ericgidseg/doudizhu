@@ -8,6 +8,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 const C = require('./cards.js');
 const AI = require('./ai.js');
 const { attach } = require('./ws.js');
@@ -190,18 +191,29 @@ function sendState(room) {
   }
 }
 function cleanupRoom(room) {
-  // 房间内没有任何真人连接才删 (纯 AI 房不会出现)
-  if (room.players.every(p => p.bot || !p.conn)) rooms.delete(room.id);
+  // 全员断线后给 60s 宽限 (刷新页面/网络闪断可凭 token 回来), 超时才删
+  if (!room.players.every(p => p.bot || !p.conn)) return;
+  clearTimeout(room._cleanupTimer);
+  room._cleanupTimer = setTimeout(() => {
+    if (room.players.every(p => p.bot || !p.conn)) rooms.delete(room.id);
+  }, 60000);
 }
 
 /* AI 调度: 轮到机器人时延迟后执行决策 */
 function scheduleBot(room) {
   if (room.phase !== 'bidding' && room.phase !== 'playing') return;
   const p = room.players[room.turn];
-  if (!p || !p.bot) return;
+  if (!p) return;
+  /* 断线玩家的回合也由 AI 托管, 否则对局卡死 (重连后交回控制权) */
+  const disconnected = !p.bot && !p.conn;
+  if (!p.bot && !disconnected) return;
   clearTimeout(room._botTimer);
   room._botTimer = setTimeout(() => {
     if (!rooms.has(room.id)) return;
+    if (room.phase !== 'bidding' && room.phase !== 'playing') return;
+    const cur = room.players[room.turn];
+    if (!cur) return;
+    if (!cur.bot && cur.conn) return;            // 断线玩家已回来, 取消托管
     try {
       const act = AI.decide(room, room.turn);
       if (act.type === 'bid') applyBid(room, room.turn, act.bid);
@@ -361,30 +373,48 @@ function err(conn, msg) { conn.send({ type: 'error', msg }); }
 
 function onCreate(conn, d) {
   const room = newRoom();
-  const p = { name: sanitize(d.name), conn, seat: 0, hand: [], wins: 0, lastIds: [] };
+  const p = { name: sanitize(d.name), conn, seat: 0, hand: [], wins: 0, lastIds: [], token: crypto.randomBytes(16).toString('hex') };
   room.players.push(p); room.hostSeat = 0;
   rooms.set(room.id, room);
   conn._room = room;
-  conn.send({ type: 'joined', roomId: room.id, seat: 0 });
+  conn.send({ type: 'joined', roomId: room.id, seat: 0, token: p.token });
   sendState(room);
 }
 function onJoin(conn, d) {
   const room = rooms.get(String(d.roomId || '').trim());
   if (!room) return err(conn, '房间不存在');
+  const token = String(d.token || '');
+  if (token) {
+    /* 断线重连: 凭证匹配则收回原座位, 不占新座 */
+    const p = room.players.find(x => x.token && x.token === token);
+    if (!p) return err(conn, '重连失败');
+    const old = p.conn;
+    clearTimeout(room._cleanupTimer);           // 有人回来了, 取消待删计时
+    p.conn = conn; p.bot = false;
+    conn._room = room;
+    conn.send({ type: 'joined', roomId: room.id, seat: p.seat, token: p.token });
+    if (old && old !== conn) { try { old.close(); } catch (e) { /* 旧连接已断 */ } }
+    broadcast(room, 'event', { event: `${p.name} 重新连接` });
+    sendState(room);
+    return;
+  }
   if (room.players.length >= 3) return err(conn, '房间已满');
   const seat = room.players.length;
-  const p = { name: sanitize(d.name), conn, seat, hand: [], wins: 0, lastIds: [] };
+  const p = { name: sanitize(d.name), conn, seat, hand: [], wins: 0, lastIds: [], token: crypto.randomBytes(16).toString('hex') };
   room.players.push(p);
   conn._room = room;
-  conn.send({ type: 'joined', roomId: room.id, seat });
+  conn.send({ type: 'joined', roomId: room.id, seat, token: p.token });
   broadcast(room, 'event', { event: `${p.name} 加入了房间` });
   sendState(room);
 }
 function onStart(conn) {
   const room = conn._room; if (!room) return;
-  if (seatOf(room, conn) !== room.hostSeat) return err(conn, '只有房主可以开始');
+  const seat = seatOf(room, conn);
+  if (seat < 0) return;
+  if (room.phase === 'playing' || room.phase === 'bidding') return;   // 已开局, 静默忽略 (并发点击)
+  /* 大厅开局: 房主专属; 一局结束后: 任意玩家都可以开下一局 */
+  if (room.phase !== 'done' && seat !== room.hostSeat) return err(conn, '只有房主可以开始');
   if (room.players.length !== 3) return err(conn, '需要 3 名玩家');
-  if (room.phase === 'playing' || room.phase === 'bidding') return;
   startGame(room);
 }
 function onBid(conn, d) {
@@ -489,6 +519,7 @@ attach(httpServer, (conn) => {
       room.players[seat].conn = null;
       broadcast(room, 'event', { event: `${room.players[seat].name} 断线` });
       sendState(room);
+      scheduleBot(room);          // 若正轮到断线者, 立即交给 AI 托管
     }
     cleanupRoom(room);
   });

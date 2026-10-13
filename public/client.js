@@ -17,7 +17,13 @@ function logLine(t) {
   while (el.children.length > 60) el.lastChild.remove();
 }
 
-ws.onopen = () => { $('lobbyMsg').textContent = ''; send({ type: 'rooms' }); };
+ws.onopen = () => {
+  $('lobbyMsg').textContent = '';
+  /* 刷新/重连后自动收回原座位 (令牌存 sessionStorage, 关闭标签页即失效) */
+  const rid = sessionStorage.getItem('ddzRoom'), tok = sessionStorage.getItem('ddzToken');
+  if (rid && tok) { send({ type: 'join', roomId: rid, token: tok }); return; }
+  send({ type: 'rooms' });
+};
 ws.onclose = () => { toast('连接已断开, 请刷新页面重连'); };
 ws.onerror = () => { $('lobbyMsg').textContent = '无法连接服务器'; };
 ws.onmessage = e => {
@@ -25,17 +31,28 @@ ws.onmessage = e => {
   switch (d.type) {
     case 'joined':
       S.roomId = d.roomId; S.mySeat = d.seat;
+      if (d.token) { sessionStorage.setItem('ddzRoom', d.roomId); sessionStorage.setItem('ddzToken', d.token); }
       $('roomIdTxt').textContent = d.roomId;
       show('room'); break;
     case 'rooms': renderRoomList(d.rooms); break;
     case 'state':
       S.state = d; S.phase = d.phase; S.selected.clear();
+      /* 新一局开始 (bidding/playing): 自动关闭上一局的结算弹窗.
+         否则房主点"再来一局"后, 其他玩家的弹窗永远留在屏幕上, 无法参与下一局 */
+      if (d.phase === 'bidding' || d.phase === 'playing') $('overModal').classList.add('hidden');
       render(); break;
     case 'event': logLine(d.event); break;
     case 'chat': chatBubble(d.seat, d.name, d.text); logLine(d.name + ': ' + d.text); break;
     case 'hint': applyHint(d.ids); break;
     case 'gameOver': showGameOver(d); break;
-    case 'error': toast(d.msg); break;
+    case 'error':
+      toast(d.msg);
+      /* 重连凭证失效 (房间已解散/服务重启): 清掉, 避免每次刷新都重试 */
+      if (d.msg === '重连失败' || d.msg === '房间不存在') {
+        sessionStorage.removeItem('ddzRoom'); sessionStorage.removeItem('ddzToken');
+        send({ type: 'rooms' });
+      }
+      break;
   }
 };
 
@@ -94,7 +111,11 @@ roomListTimer = setInterval(refreshRooms, 5000);
 $('startBtn').onclick = () => send({ type: 'start' });
 $('addBotBtn').onclick = () => send({ type: 'addbot' });
 $('againBtn').onclick = () => { $('overModal').classList.add('hidden'); send({ type: 'start' }); };
-$('backBtn').onclick = () => location.reload();
+$('backBtn').onclick = () => {
+  /* 主动返回大厅 = 离开房间, 清掉重连凭证后再刷新 */
+  sessionStorage.removeItem('ddzRoom'); sessionStorage.removeItem('ddzToken');
+  location.reload();
+};
 
 /* ============ 渲染 ============ */
 function render() {
@@ -390,7 +411,7 @@ function showGameOver(d) {
       $('overHands').appendChild(row);
     }
   }
-  const amHost = S.state && S.mySeat === S.state.hostSeat;
-  $('againBtn').classList.toggle('hidden', !amHost);
+  /* 结算后任意玩家都可以开下一局 (服务端 done 阶段放开权限) */
+  $('againBtn').classList.remove('hidden');
   $('overModal').classList.remove('hidden');
 }
