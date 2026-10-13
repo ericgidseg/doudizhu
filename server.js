@@ -176,8 +176,9 @@ function sendState(room) {
       type: 'state', ...base,
       mySeat: p.seat,
       hand: p.conn ? C.sortCards(p.hand) : [],
-      /* 底牌对所有人公开显示 (斗地主惯例: 亮底牌) */
-      bottom: room.phase !== 'lobby' ? C.sortCards(room.bottom) : [],
+      /* 底牌在叫地主阶段不公开; 地主确定 (playing/done) 后才亮出.
+         斗地主规则: 底牌在有人叫地主前是暗牌, 亮底牌是确定地主后的仪式. */
+      bottom: (room.phase === 'playing' || room.phase === 'done') ? C.sortCards(room.bottom) : [],
       lastPlay: room.lastPlay && {
         seat: room.lastPlay.seat,
         ids: room.lastPlay.ids.slice(),

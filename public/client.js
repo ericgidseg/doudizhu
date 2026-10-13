@@ -204,7 +204,7 @@ function renderPlayers(st) {
 }
 function renderTop(st) {
   const bc = $('bottomCards'); bc.innerHTML = '';
-  /* 只有自己当地主时, 服务端才发 bottom 数组 → 才显示底牌 */
+  /* 服务端只在叫地主结束 (playing/done) 后才发 bottom → 之前不显示底牌 */
   if (st.bottom && st.bottom.length) {
     for (const c of st.bottom) bc.appendChild(cardEl(c, { small: true, passive: true }));
   }
