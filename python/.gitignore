@@ -1,0 +1,23 @@
+# 打包产物 (180MB, 可由 build-app.sh 重建)
+dist/
+
+# 训练中间态 (52MB)
+checkpoints/
+
+# 实验模型: 微调/自对弈的中间产物, 结论见 MCTS_增强方案.md
+# 注意 models_sl/ 和 models_wp_backup/ 不在此列 —— 投票集成要用, 见下
+models_v2/
+models_v3/
+models_v4/
+models_hybrid/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# 对局回放
+replays/
+
+# 系统
+.DS_Store

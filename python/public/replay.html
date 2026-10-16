@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>对局复盘 · 斗地主</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  body { overflow: auto; height: auto; min-height: 100vh; }
+  #app { height: auto; min-height: 100vh; }
+  .rp-wrap { width: 100%; max-width: 1100px; margin: 0 auto; padding: 18px 14px 60px; }
+  .rp-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
+  .rp-head h1 { font-size: 22px; color: #ffd77a; letter-spacing: 2px; }
+  .rp-head a { color: #9fc4a6; font-size: 13px; text-decoration: none; }
+  .rp-head a:hover { color: #ffd77a; }
+  .rp-list { background: rgba(0,0,0,.3); border: 1px solid rgba(255,215,130,.2); border-radius: 12px; padding: 10px; }
+  .rp-item {
+    display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 8px;
+    background: rgba(255,255,255,.05); margin: 6px 0; cursor: pointer; font-size: 13px;
+  }
+  .rp-item:hover { background: rgba(255,215,122,.12); }
+  .rp-item .rid { color: #ffd77a; font-weight: 700; min-width: 70px; }
+  .rp-item .rt { color: #b9cdbd; flex: 1; }
+  .rp-item .rw { font-size: 12px; padding: 1px 8px; border-radius: 8px; }
+  .rp-item .rw.lord { background: #d1452b; color: #fff; }
+  .rp-item .rw.farmer { background: #3a5f47; color: #cfe4d4; }
+  .rp-item .rd { color: #8fae94; font-size: 12px; }
+  .rp-empty { text-align: center; color: #7d9b84; padding: 30px; font-size: 13px; }
+
+  /* ---- 牌桌回放 ---- */
+  .rp-stage { display: none; }
+  .rp-stage.on { display: block; }
+  .rp-meta {
+    display: flex; flex-wrap: wrap; gap: 14px; align-items: center; font-size: 13px;
+    color: #cfe4d4; background: rgba(0,0,0,.3); padding: 10px 14px; border-radius: 10px;
+    border: 1px solid rgba(255,215,122,.2); margin-bottom: 12px;
+  }
+  .rp-meta b { color: #ffd77a; }
+  .rp-meta .diff { padding: 1px 8px; border-radius: 8px; background: #3a5f47; }
+  .rp-meta .res { font-weight: 700; }
+  .rp-meta .res.lord { color: #ff8b6e; }
+  .rp-meta .res.farmer { color: #7cf79b; }
+  .rp-board { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 900px) { .rp-board { grid-template-columns: 1fr; } }
+  .rp-seats { display: flex; flex-direction: column; gap: 10px; }
+  .rp-seat {
+    background: rgba(0,0,0,.35); border: 1px solid rgba(255,255,255,.12); border-radius: 10px; padding: 8px 10px;
+  }
+  .rp-seat.me-turn { outline: 2px solid #ffd77a; }
+  .rp-seat.lord { border-color: rgba(209,69,43,.6); }
+  .rp-seat .ph { display: flex; gap: 8px; align-items: baseline; margin-bottom: 6px; font-size: 13px; }
+  .rp-seat .ph .nm { font-weight: 700; color: #f0e6d0; }
+  .rp-seat .ph .tag { font-size: 11px; padding: 0 6px; border-radius: 7px; background: #3a5f47; color: #cfe4d4; }
+  .rp-seat .ph .tag.lord { background: #d1452b; color: #fff; }
+  .rp-seat .ph .cnt { color: #ffd77a; font-size: 12px; }
+  .rp-seat .cards { display: flex; flex-wrap: wrap; gap: 2px; }
+  .rp-seat .cards .card { width: 30px; height: 43px; border-radius: 4px; }
+  .rp-seat .cards .card .rank { font-size: 12px; }
+  .rp-seat .cards .card .suit-sm { font-size: 10px; }
+  .rp-seat .cards .card .suit-big { font-size: 18px; right: -3px; bottom: -4px; }
+  .rp-seat .cards .card .joker-col i { font-size: 7px; }
+  .rp-seat .cards .card .joker-col { top: 3px; left: 3px; }
+  .rp-seat .cards .card.out { opacity: .22; }
+
+  .rp-side { display: flex; flex-direction: column; gap: 10px; }
+  .rp-bottom { background: rgba(0,0,0,.35); border: 1px solid rgba(255,215,122,.25); border-radius: 10px; padding: 8px 12px; }
+  .rp-bottom .lbl { font-size: 12px; color: #9fc4a6; margin-bottom: 6px; }
+  .rp-bottom .cards { display: flex; gap: 4px; }
+  .rp-bottom .card { width: 40px; height: 58px; }
+  .rp-bottom .card .rank { font-size: 15px; }
+  .rp-bottom .card .suit-sm { font-size: 12px; }
+  .rp-bottom .card .suit-big { font-size: 30px; }
+  .rp-lastplay { background: rgba(0,0,0,.35); border: 1px solid rgba(255,255,255,.12); border-radius: 10px; padding: 8px 12px; min-height: 70px; }
+  .rp-lastplay .lbl { font-size: 12px; color: #9fc4a6; margin-bottom: 6px; }
+  .rp-lastplay .cards { display: flex; gap: 3px; flex-wrap: wrap; }
+  .rp-lastplay .card { width: 36px; height: 52px; }
+  .rp-lastplay .card .rank { font-size: 14px; }
+  .rp-lastplay .card .suit-sm { font-size: 11px; }
+  .rp-lastplay .card .suit-big { font-size: 26px; }
+  .rp-lastplay .pt { font-size: 12px; color: #ffe9b0; margin-top: 4px; }
+
+  .rp-ctl { display: flex; align-items: center; gap: 8px; margin: 12px 0; flex-wrap: wrap; }
+  .rp-ctl .btn { padding: 8px 16px; font-size: 14px; }
+  .rp-ctl input[type=range] { flex: 1; min-width: 140px; accent-color: #ffd77a; margin: 0; }
+  .rp-ctl .pos { font-size: 13px; color: #ffd77a; min-width: 70px; text-align: center; font-variant-numeric: tabular-nums; }
+  .rp-log {
+    background: rgba(0,0,0,.4); border-radius: 10px; padding: 10px 14px;
+    font-size: 12px; color: #cfe4d4; max-height: 320px; overflow-y: auto;
+    border: 1px solid rgba(255,255,255,.1);
+  }
+  .rp-log .row { padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,.05); display: flex; gap: 8px; }
+  .rp-log .row.cur { color: #ffd77a; font-weight: 700; }
+  .rp-log .row .idx { color: #7d9b84; min-width: 26px; }
+  .rp-log .row .who { min-width: 60px; color: #ffe9b0; }
+  .rp-log .row.pass .what { color: #8fae94; }
+  .rp-log .row.bid .what { color: #7fb8ff; }
+</style>
+</head>
+<body>
+<div id="app">
+<div class="rp-wrap">
+
+  <div class="rp-head">
+    <h1>📼 对局复盘</h1>
+    <div>
+      <a href="/">← 返回大厅</a>
+    </div>
+  </div>
+
+  <!-- 对局列表 -->
+  <div id="listWrap" class="rp-list">
+    <div class="rp-empty">加载中…</div>
+  </div>
+
+  <!-- 回放区 -->
+  <div id="stage" class="rp-stage">
+    <div class="rp-meta" id="rpMeta"></div>
+
+    <div class="rp-ctl">
+      <button class="btn ghost" id="prevBtn">◀ 上一步</button>
+      <button class="btn gold" id="playBtn">▶ 播放</button>
+      <button class="btn ghost" id="nextBtn">下一步 ▶</button>
+      <input type="range" id="slider" min="0" max="0" value="0">
+      <span class="pos" id="posTxt">0 / 0</span>
+      <button class="btn ghost" id="backList">≡ 列表</button>
+    </div>
+
+    <div class="rp-board">
+      <div class="rp-seats" id="rpSeats"></div>
+      <div class="rp-side">
+        <div class="rp-bottom">
+          <div class="lbl">底牌</div>
+          <div class="cards" id="rpBottom"></div>
+        </div>
+        <div class="rp-lastplay">
+          <div class="lbl">桌面出牌</div>
+          <div class="cards" id="rpLast"></div>
+          <div class="pt" id="rpLastType"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="rp-log" id="rpLog" style="margin-top:12px"></div>
+  </div>
+
+</div>
+</div>
+
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const DIFF_LABEL = { normal: '普通', hard: '困难', expert: '大师', legend: '传说' };
+
+/* 渲染一张牌 (与 client.js cardEl 一致, 静态页复刻) */
+function cardEl(c, { passive = true } = {}) {
+  const el = document.createElement('div');
+  const joker = c.rank === 'SJ' || c.rank === 'BJ';
+  const red = c.suit === '♥' || c.suit === '♦';
+  el.className = 'card' + (joker ? (c.rank === 'BJ' ? ' joker joker-b' : ' joker joker-s') : (red ? ' red' : ' black')) + (passive ? ' passive' : '');
+  if (joker) {
+    el.innerHTML = `<span class="joker-col">${'JOKER'.split('').map(ch => `<i>${ch}</i>`).join('')}</span>`;
+  } else {
+    el.innerHTML = `<span class="corner"><span class="rank">${c.rank}</span><span class="suit-sm">${c.suit}</span></span><span class="suit-big">${c.suit}</span>`;
+  }
+  el.dataset.id = c.id;
+  return el;
+}
+const RANK_ORDER = ['3','4','5','6','7','8','9','10','J','Q','K','A','2','SJ','BJ'];
+const RV = {}; RANK_ORDER.forEach((r,i)=>RV[r]=i);
+const sortCards = cs => cs.slice().sort((a,b)=>RV[b.rank]-RV[a.rank] || a.id-b.id);
+
+/* ---------------- 列表 ---------------- */
+async function loadList() {
+  const r = await fetch('/api/replays').then(x=>x.json()).catch(()=>[]);
+  const w = $('listWrap');
+  if (!r.length) { w.innerHTML = '<div class="rp-empty">还没有对局记录。开一局再来复盘。</div>'; return; }
+  w.innerHTML = '';
+  for (const g of r) {
+    const el = document.createElement('div');
+    el.className = 'rp-item';
+    const names = g.players.map(p => p.name + (p.bot ? '🤖' : '')).join(' / ');
+    const res = g.landlordWin ? '地主胜' : '农民胜';
+    const when = (g.startedAt || '').replace('T', ' ').slice(5, 16);
+    el.innerHTML = `
+      <span class="rid">房间 ${g.roomId}</span>
+      <span class="rt">${names}</span>
+      <span class="rw ${g.landlordWin ? 'lord' : 'farmer'}">${res}</span>
+      <span class="rd">${DIFF_LABEL[g.difficulty] || g.difficulty} · ${g.actions} 步 · ${when}</span>`;
+    el.onclick = () => openReplay(g.f);
+    w.appendChild(el);
+  }
+}
+
+/* ---------------- 回放 ---------------- */
+let G = null;            // 当前 replay 数据
+let step = 0;            // 当前回放到的 action 下标 (0..actions.length)
+let timer = null;
+
+function mkState() {
+  /* 根据 step 重放到当前局面 */
+  const hands = G.players.map(p => sortCards(p.hand.slice()));
+  const lord = { seat: -1 };
+  let lastPlay = null;   // {seat, cards, typeName}
+  let turn = G.landlordSeat;   // 叫分阶段从 dealer 开始
+  const bids = [-1,-1,-1];
+  let pass = 0;
+
+  for (let i = 0; i < step && i < G.actions.length; i++) {
+    const a = G.actions[i];
+    if (a.type === 'bid') {
+      bids[a.seat] = a.bid;
+    } else if (a.type === 'play') {
+      const set = new Set(a.ids);
+      hands[a.seat] = hands[a.seat].filter(c => !set.has(c.id));
+      lastPlay = { seat: a.seat, cards: a.cards, typeName: a.typeName };
+      pass = 0;
+    } else if (a.type === 'pass') {
+      pass++;
+      if (pass >= 2) { lastPlay = null; pass = 0; }
+    }
+  }
+  /* 地主手牌 = 初始17 + 底牌, 减去其已出的牌
+     (players[seat].hand 存的是开局 17 张, 底牌另录) */
+  if (G.landlordSeat >= 0) {
+    const ls = G.landlordSeat;
+    const playedIds = new Set();
+    for (let i = 0; i < step && i < G.actions.length; i++) {
+      const a = G.actions[i];
+      if (a.type === 'play' && a.seat === ls) for (const id of a.ids) playedIds.add(id);
+    }
+    hands[ls] = sortCards(G.players[ls].hand.concat(G.bottom)).filter(c => !playedIds.has(c.id));
+    lord.seat = ls;
+  }
+  // 当前该谁: 简单推断 —— 下一个 action 的 seat
+  const curSeat = step < G.actions.length ? G.actions[step].seat : -1;
+  return { hands, lordSeat: lord.seat, lastPlay, curSeat, bids };
+}
+
+function render() {
+  if (!G) return;
+  const st = mkState();
+  // meta
+  const winner = G.players[G.winnerSeat];
+  $('rpMeta').innerHTML = `
+    <span>房间 <b>${G.roomId}</b> 第${G.seq}局</span>
+    <span>难度 <span class="diff">${DIFF_LABEL[G.difficulty] || G.difficulty}</span></span>
+    <span>地主 <b>${G.players[G.landlordSeat] ? G.players[G.landlordSeat].name : '-'}</b></span>
+    <span class="res ${G.landlordWin ? 'lord' : 'farmer'}">${G.landlordWin ? '地主胜' : '农民胜'} ×${G.finalMultiplier}</span>
+    <span style="margin-left:auto;color:#8fae94">${(G.startedAt||'').replace('T',' ').slice(5,19)}</span>`;
+  // 三家手牌
+  const sw = $('rpSeats'); sw.innerHTML = '';
+  for (let s = 0; s < 3; s++) {
+    const p = G.players[s];
+    const div = document.createElement('div');
+    div.className = 'rp-seat' + (s === st.lordSeat ? ' lord' : '') + (s === st.curSeat ? ' me-turn' : '');
+    const hand = st.hands[s];
+    div.innerHTML = `<div class="ph">
+      <span class="nm">${p.name}${p.bot ? ' 🤖' : ''}</span>
+      <span class="tag ${s===st.lordSeat?'lord':''}">${s===st.lordSeat?'地主':'农民'}</span>
+      <span class="cnt">${hand.length} 张</span>
+      <span style="margin-left:auto;color:#7d9b84;font-size:11px">${st.bids[s]===-1?'':(st.bids[s]===0?'不叫':'叫'+st.bids[s])}</span>
+    </div>`;
+    const box = document.createElement('div'); box.className = 'cards';
+    for (const c of hand) box.appendChild(cardEl(c));
+    div.appendChild(box);
+    sw.appendChild(div);
+  }
+  // 底牌
+  const bb = $('rpBottom'); bb.innerHTML = '';
+  for (const c of G.bottom) bb.appendChild(cardEl(c));
+  // 桌面出牌
+  const lp = $('rpLast'); lp.innerHTML = '';
+  if (st.lastPlay) {
+    for (const c of sortCards(st.lastPlay.cards)) lp.appendChild(cardEl(c));
+    $('rpLastType').textContent = `${G.players[st.lastPlay.seat].name} · ${st.lastPlay.typeName}`;
+  } else {
+    $('rpLastType').textContent = '(新一轮领出)';
+  }
+  // 日志
+  const lg = $('rpLog'); lg.innerHTML = '';
+  G.actions.forEach((a, i) => {
+    const row = document.createElement('div');
+    row.className = 'row' + (i === step - 1 ? ' cur' : '') + (a.type === 'pass' ? ' pass' : '') + (a.type === 'bid' ? ' bid' : '');
+    const p = G.players[a.seat];
+    let what = '';
+    if (a.type === 'bid') what = a.bid === 0 ? '不叫' : `叫 ${a.bid} 分`;
+    else if (a.type === 'pass') what = '不出';
+    else what = `出 ${a.typeName} ${sortCards(a.cards).map(c => c.rank).join(' ')} (剩${a.left})`;
+    row.innerHTML = `<span class="idx">${i + 1}</span><span class="who">${p.name}${p.bot ? '🤖' : ''}</span><span class="what">${what}</span>`;
+    row.onclick = () => { step = i + 1; pause(); render(); };
+    lg.appendChild(row);
+  });
+  const cur = lg.querySelector('.row.cur');
+  if (cur) cur.scrollIntoView({ block: 'nearest' });
+  // 控件
+  $('slider').max = G.actions.length;
+  $('slider').value = step;
+  $('posTxt').textContent = `${step} / ${G.actions.length}`;
+}
+
+function pause() { if (timer) { clearInterval(timer); timer = null; $('playBtn').textContent = '▶ 播放'; } }
+function play() {
+  if (timer) { pause(); return; }
+  if (step >= G.actions.length) step = 0;
+  $('playBtn').textContent = '⏸ 暂停';
+  timer = setInterval(() => {
+    if (step >= G.actions.length) { pause(); return; }
+    step++; render();
+  }, 900);
+}
+
+async function openReplay(file) {
+  const g = await fetch('/api/replay?f=' + encodeURIComponent(file)).then(x => x.json()).catch(() => null);
+  if (!g) return;
+  G = g; step = 0;
+  $('listWrap').style.display = 'none';
+  $('stage').classList.add('on');
+  render();
+}
+
+$('prevBtn').onclick = () => { if (step > 0) { step--; pause(); render(); } };
+$('nextBtn').onclick = () => { if (step < G.actions.length) { step++; pause(); render(); } };
+$('playBtn').onclick = play;
+$('slider').oninput = e => { step = +e.target.value; pause(); render(); };
+$('backList').onclick = () => { pause(); $('stage').classList.remove('on'); $('listWrap').style.display = ''; };
+document.addEventListener('keydown', e => {
+  if (!G) return;
+  if (e.key === 'ArrowLeft') $('prevBtn').click();
+  if (e.key === 'ArrowRight') $('nextBtn').click();
+  if (e.key === ' ') { e.preventDefault(); play(); }
+});
+
+loadList();
+</script>
+</body>
+</html>

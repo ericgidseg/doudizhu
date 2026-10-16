@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>斗地主 · 局域网对战</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- ======== 大厅 ======== -->
+  <section id="lobby" class="screen">
+    <div class="lobby-card">
+      <h1 class="logo">斗<span>地主</span></h1>
+      <p class="sub">局域网三人对战 · 无需联网</p>
+      <input id="nameInput" maxlength="12" placeholder="输入你的昵称">
+      <div class="lobby-btns">
+        <button id="createBtn" class="btn gold">创建房间</button>
+        <button id="soloLegendBtn" class="btn legend">单人 · 对战 AI</button>
+      </div>
+      <div class="join-row">
+        <input id="roomInput" maxlength="4" inputmode="numeric" placeholder="房间号">
+        <button id="joinBtn" class="btn">加入房间</button>
+      </div>
+      <div id="roomListWrap">
+        <div class="rl-head">可加入的房间 <a id="refreshRooms" href="javascript:;">刷新</a></div>
+        <ul id="roomList"></ul>
+      </div>
+      <p id="lobbyMsg" class="msg"></p>
+      <a id="rulesBtn" href="javascript:;" class="rules-link">📖 运行教程 & 游戏规则</a>
+      <a href="/replay.html" class="rules-link" style="margin-left:12px">📼 对局复盘</a>
+    </div>
+    <footer id="lanTip"></footer>
+  </section>
+
+  <!-- ======== 房间等待 ======== -->
+  <section id="room" class="screen hidden">
+    <div class="room-card">
+      <h2>房间 <b id="roomIdTxt"></b></h2>
+      <p class="sub">把房间号告诉同局域网的好友 (共需 3 人)</p>
+      <ul id="waitList"></ul>
+      <button id="addBotBtn" class="btn hidden">＋ 添加 AI</button>
+      <p class="sub" style="font-size:12px;color:#8b96a8">AI: 传说 (蒙特卡洛)</p>
+      <button id="startBtn" class="btn gold hidden">开始游戏</button>
+      <p id="roomMsg" class="msg"></p>
+    </div>
+  </section>
+
+  <!-- ======== 牌桌 ======== -->
+  <section id="table" class="screen hidden">
+    <!-- 对手 -->
+    <div id="oppL" class="opp opp-left">
+      <div class="opp-info"><span class="pname"></span><span class="role-tag"></span><span class="ccount"></span></div>
+      <div class="opp-backs"></div>
+    </div>
+    <div id="oppR" class="opp opp-right">
+      <div class="opp-info"><span class="pname"></span><span class="role-tag"></span><span class="ccount"></span></div>
+      <div class="opp-backs"></div>
+    </div>
+
+    <!-- 中央出牌区: 所有人的出牌都集中在这 -->
+    <div id="centerPlay"></div>
+
+    <!-- 顶部: 底牌 + 记牌器 紧挨居中 (底牌在记牌器左边) -->
+    <div id="topRow">
+      <div id="counterStrip">
+        <div class="cs-head" id="counterToggle">🃏 记牌器 <span id="csArrow">▾</span></div>
+        <div class="counter-row">
+          <div id="bottomArea">
+            <div id="bottomCards" class="mini-cards"></div>
+            <div id="multiTxt"></div>
+          </div>
+          <div id="counterBody" class="counter-grid"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 记分牌 (左下) -->
+    <div id="scorePanel" class="panel">
+      <div class="panel-head" data-toggle="scoreBody">📊 积分 <span class="arrow">▾</span></div>
+      <div id="scoreBody" class="panel-body"></div>
+    </div>
+
+    <div id="turnBanner"></div>
+
+    <!-- 我方区域 -->
+    <div id="meArea">
+      <div id="meInfo"><span class="pname"></span><span class="role-tag"></span></div>
+      <div id="hand"></div>
+      <div id="actions"></div>
+    </div>
+
+    <!-- 聊天 / 日志 -->
+    <div id="log"></div>
+    <div id="chatBar">
+      <input id="chatInput" maxlength="60" placeholder="说点什么…">
+      <div id="quickChat"></div>
+    </div>
+  </section>
+
+  <!-- ======== 结算 ======== -->
+  <div id="overModal" class="modal hidden">
+    <div class="modal-card">
+      <h2 id="overTitle"></h2>
+      <p id="overDetail"></p>
+      <table id="overScores" class="score-tbl"></table>
+      <div id="overHands"></div>
+      <button id="againBtn" class="btn gold hidden">再来一局</button>
+      <button id="backBtn" class="btn">返回大厅</button>
+    </div>
+  </div>
+
+  <!-- ======== 规则弹窗 ======== -->
+  <div id="rulesModal" class="modal hidden">
+    <div class="modal-card rules-card">
+      <h2>斗地主 · 规则与教程</h2>
+      <div class="rules-body">
+        <h3>▍运行教程（3 步开局）</h3>
+        <ol>
+          <li>在有 Node.js 的机器上执行 <code>node server.js</code>（默认 8000 端口，可 <code>node server.js 9000</code> 换端口），控制台会打印内网访问地址。</li>
+          <li>把地址（如 <code>http://192.168.5.25:8000</code>）发给同事，三人各自用浏览器打开，输入昵称。</li>
+          <li>一人点 <b>创建房间</b>；其余两人在大厅下方<b>房间列表点一下</b>即可加入（也可手动输 4 位房间号）。人齐后房主点 <b>开始游戏</b>。</li>
+        </ol>
+        <h3>▍基本规则</h3>
+        <ul>
+          <li>3 人一副 54 张牌（含大王、小王），每人 17 张，留 3 张底牌。</li>
+          <li>轮流叫分（不叫 / 1 / 2 / 3 分），叫分最高者成为<b>地主</b>，拿走 3 张底牌并先出牌；全不叫则重新发牌。</li>
+          <li>地主 1 人对战两名<b>农民</b>（农民是队友），任意一方先出完手牌即获胜。</li>
+          <li>后出牌者必须出<b>同牌型且更大</b>的牌，或<b>炸弹 / 王炸</b>；也可以点 <b>不出</b>。两家连续不出，最后出牌者重新任意领出。</li>
+        </ul>
+        <h3>▍牌的大小</h3>
+        <p>大王 &gt; 小王 &gt; 2 &gt; A &gt; K &gt; Q &gt; J &gt; 10 &gt; 9 &gt; 8 &gt; 7 &gt; 6 &gt; 5 &gt; 4 &gt; 3（不分花色）</p>
+        <h3>▍牌型</h3>
+        <table class="rules-tbl">
+          <tr><th>牌型</th><th>说明</th></tr>
+          <tr><td>单张</td><td>任意一张牌</td></tr>
+          <tr><td>对子</td><td>两张同点（大王小王不算对）</td></tr>
+          <tr><td>三张</td><td>三张同点</td></tr>
+          <tr><td>三带一 / 三带二</td><td>三张 + 1 单 或 + 1 对</td></tr>
+          <tr><td>顺子</td><td>≥5 张连续单牌，如 34567（不含 2 和王）</td></tr>
+          <tr><td>连对</td><td>≥3 对连续对子，如 334455（不含 2 和王）</td></tr>
+          <tr><td>飞机</td><td>≥2 组连续三张，可带同数量单牌或对子，如 555666+34 / +3344</td></tr>
+          <tr><td>四带二</td><td>四张 + 2 单牌 或 + 2 对（不算炸弹）</td></tr>
+          <tr><td>炸弹 💥</td><td>四张同点，可压任何普通牌型，倍数 ×2</td></tr>
+          <tr><td>王炸 🚀</td><td>大王 + 小王，最大，倍数 ×2</td></tr>
+        </table>
+        <h3>▍操作</h3>
+        <ul>
+          <li><b>点选手牌</b> → <b>出牌</b>；<b>提示</b> 自动选最小能压的牌；<b>不出</b> 跳过。</li>
+          <li>右下角可发消息 / 快捷短语；倍数显示在左上角，炸弹王炸会翻倍。</li>
+        </ul>
+      </div>
+      <button id="rulesClose" class="btn gold">知道了</button>
+    </div>
+  </div>
+
+  <div id="toast"></div>
+</div>
+<script src="client.js"></script>
+</body>
+</html>
