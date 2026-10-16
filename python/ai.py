@@ -3,6 +3,8 @@ import os
 import numpy as np
 import onnxruntime as ort
 
+from encoding import get_obs
+
 MODEL_DIR = os.path.join(os.path.dirname(__file__), 'models')
 
 _sessions = {}
@@ -20,7 +22,6 @@ def decide(infoset):
     输入 InfoSet, 返回选中的动作 (牌列表, [] 表示 pass).
     对每个合法动作编码一行, ONNX 打分, argmax.
     """
-    from encoding import get_obs
     obs = get_obs(infoset)
     sess = _sess(infoset.player_position)
     out = sess.run(['values'], {

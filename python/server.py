@@ -352,6 +352,7 @@ def apply_pass(room, seat):
     if room['replay']:
         room['replay']['actions'].append({'type': 'pass', 'seat': seat})
     room['action_seq_dz'].append([])
+    room['last_move_dict_dz'][seat] = []
     room['passCount'] += 1
     broadcast(room, 'event', event=f"{p['name']} 不出")
     room['turn'] = (seat + 1) % 3
