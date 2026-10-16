@@ -18,7 +18,12 @@ import env.move_detector as md
 import env.move_selector as ms
 
 _BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(__file__))
-MODEL_DIR = os.path.join(_BASE_DIR, 'models')          # ADP
+MODEL_DIR = os.path.join(_BASE_DIR, 'models')          # ADP (农民)
+# 地主模型单独用微调后的 models_best/landlord.onnx
+# (hero=landlord vs baseline 训练, 400 局配对综合胜率 0.525 vs models/ 的 0.500)
+LL_MODEL_DIR = os.path.join(_BASE_DIR, 'models_best')
+if not os.path.isfile(os.path.join(LL_MODEL_DIR, 'landlord.onnx')):
+    LL_MODEL_DIR = MODEL_DIR    # 不存在则回退到 models/
 SL_MODEL_DIR = os.path.join(_BASE_DIR, 'models_sl')    # SL 监督学习模型
 WP_MODEL_DIR = os.path.join(_BASE_DIR, 'models_wp_backup')  # WP 留作投票
 
@@ -27,9 +32,12 @@ WP_MODEL_DIR = os.path.join(_BASE_DIR, 'models_wp_backup')  # WP 留作投票
 #   sample  - 按 softmax(Q/T) 采样, 有变化, 难被读牌
 #   mix     - 每步以 MIX_SL_PROB 概率改用 SL 模型, 打法更像人
 #   vote    - ADP+WP+SL 三模型 Q 值投票, 最稳 (推荐硬实力)
+#   human   - vote 投票 + 温度采样 (非 argmax), 打法更像人类, 仍有实力
 AI_STYLE = os.environ.get('AI_STYLE', 'vote')
 SAMPLE_TEMP = float(os.environ.get('AI_TEMP', '0.5'))
 MIX_SL_PROB = float(os.environ.get('AI_MIX_SL', '0.25'))
+# human 模式的采样温度 (越小越接近 argmax = 越强但越机械)
+HUMAN_TEMP = float(os.environ.get('AI_HUMAN_TEMP', '0.3'))
 # 是否启用 ISMCTS rollout 增强 (vote 模式下生效). 设 1 可打开.
 #
 # 默认关闭: 修完所有已知 bug、权重调到最优之后, 它依然显著更差.
@@ -74,9 +82,11 @@ def _new_session(path):
 
 
 def _sess(position):
+    """ADP 模型: 地主走 models_best/ (微调过), 农民走 models/ (原始)."""
     if position not in _sessions:
+        d = LL_MODEL_DIR if position == 'landlord' else MODEL_DIR
         _sessions[position] = _new_session(
-            os.path.join(MODEL_DIR, f'{position}.onnx'))
+            os.path.join(d, f'{position}.onnx'))
     return _sessions[position]
 
 
@@ -94,12 +104,17 @@ def _sess_wp(position):
     return _wp_sessions[position]
 
 
-def _pick_idx(values):
-    """根据 AI_STYLE 从 Q 值数组中选动作下标."""
+def _pick_idx(values, temperature=None):
+    """根据 AI_STYLE 从 Q 值数组中选动作下标.
+
+    temperature: 覆盖默认采样温度. human 模式默认 HUMAN_TEMP.
+    """
+    # argmax / vote 用 argmax; human/sample/mix 走 softmax 采样
     if AI_STYLE in ('argmax', 'vote') or len(values) <= 1:
         return int(np.argmax(values))
     # softmax with temperature
-    logits = values / max(SAMPLE_TEMP, 1e-6)
+    T = temperature if temperature is not None else SAMPLE_TEMP
+    logits = values / max(T, 1e-6)
     logits = logits - logits.max()
     p = np.exp(logits)
     p = p / p.sum()
@@ -258,7 +273,7 @@ def decide(room, seat):
     deadline = room.get('turnDeadline')
     time_left = max(0.0, deadline - time.time()) if deadline else 0.0
 
-    if AI_STYLE == 'vote':
+    if AI_STYLE in ('vote', 'human'):
         values = _vote_values(obs, pos)
         # 决策难度判断: 只在"碾压级 Q 差距"或"终局"时跳过 MCTS
         n_legal = len(obs['legal_actions'])
@@ -278,7 +293,9 @@ def decide(room, seat):
             values = _mcts_pick(infoset, values, pos, played_by_pos,
                                 num_left, time_left, min_rollouts=6,
                                 room=room, seat=seat, seat2pos=seat2pos)
-        best_idx = _pick_idx(values)
+        # vote 用 argmax 保最强; human 用 HUMAN_TEMP 温度采样更像人
+        temp = None if AI_STYLE == 'vote' else HUMAN_TEMP
+        best_idx = _pick_idx(values, temperature=temp)
     else:
         # mix 模式下这一步用 SL 模型 (更像人类打法)
         use_sl = (AI_STYLE == 'mix' and np.random.random() < MIX_SL_PROB)

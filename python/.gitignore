@@ -10,6 +10,8 @@ models_v2/
 models_v3/
 models_v4/
 models_hybrid/
+# hero vs baseline 训练的中间产物 (一轮训练多次评估导出)
+models_exp*/
 
 # Python
 __pycache__/

@@ -13,6 +13,7 @@ pyinstaller --noconfirm --clean \
   --onedir \
   --console \
   --add-data "$ROOT/models:models" \
+  --add-data "$ROOT/models_best:models_best" \
   --add-data "$ROOT/models_sl:models_sl" \
   --add-data "$ROOT/models_wp_backup:models_wp_backup" \
   --add-data "$ROOT/public:public" \

@@ -56,11 +56,16 @@ EXPORT_DIR = os.path.join(os.path.dirname(__file__), 'models_v2')
 # 数据收集
 # ---------------------------------------------------------------------------
 
-def collect_batch(models, n_games, eps, device):
+def collect_batch(models, n_games, eps, device,
+                  baseline_dir=None, hero_positions=None):
     """跑 n_games 局, 返回 {position: [(z, x, action_idx, reward), ...]}.
 
     直接用 PyTorch CPU 推理自对弈 — 不需要 ONNX 导出.
     训练用 device 梯度, 推理用 CPU (MPS 对小 batch 有 overhead).
+
+    baseline_dir: 若提供, hero_positions 用候选 models (PyTorch),
+                  其他位置用 baseline_dir 的 ONNX. 让训练信号
+                  变成「打赢固定参考」而非「打赢自己」.
     """
     batch_data = {p: [] for p in POSITIONS}
     stats = {'ll_win': 0, 'total_steps': 0, 'total_reward': 0.0}
@@ -68,7 +73,8 @@ def collect_batch(models, n_games, eps, device):
     # 模型已经在 device 上, predict 内部会处理 device transfer
     for _ in range(n_games):
         traj, rewards, winner, steps = run_episode(
-            models=models, eps=eps, device=device)
+            models=models, eps=eps, device=device,
+            baseline_dir=baseline_dir, hero_positions=hero_positions)
         stats['total_steps'] += steps
         stats['total_reward'] += rewards['landlord']
         if winner == 'landlord':
@@ -177,9 +183,14 @@ def train_iteration(models, optimizers, buffer, args, device):
     """一轮训练: 收集经验 -> 各位置训练 -> 返回统计."""
 
     # 1. 收集经验 (PyTorch CPU 推理)
+    # baseline_dir + hero_positions: 非 hero 位置用固定 ONNX 基线,
+    # 训练信号从"打赢自己"变成"打赢基线"
     t0 = time.time()
+    baseline_dir = getattr(args, 'baseline_dir', None)
+    hero_positions = getattr(args, 'hero_positions', None)
     batch_data, stats = collect_batch(
-        models, args.games_per_iter, args.eps, device)
+        models, args.games_per_iter, args.eps, device,
+        baseline_dir=baseline_dir, hero_positions=hero_positions)
     buffer.add_batch(batch_data)
     collect_time = time.time() - t0
 
@@ -355,7 +366,18 @@ def main():
                              '低于此值不导出, 避免用变差的模型覆盖)')
     parser.add_argument('--baseline-dir', type=str, default=None,
                         help='评估对比的 baseline ONNX 目录')
+    parser.add_argument('--hero-positions', type=str, default=None,
+                        help='候选模型占据的位置 (逗号分隔, e.g. "landlord" '
+                             '或 "landlord_up,landlord_down"). '
+                             '其余位置用 --baseline-dir 的 ONNX. '
+                             '默认 None = 三个位置都用候选 (传统自对弈). '
+                             '提供后, 训练信号从「打赢自己」变「打赢基线」, '
+                             '更接近真实强度提升.')
     args = parser.parse_args()
+    if args.hero_positions:
+        args.hero_positions = set(args.hero_positions.split(','))
+    else:
+        args.hero_positions = None
 
     device = DEVICE
     export_dir = args.export_dir or EXPORT_DIR

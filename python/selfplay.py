@@ -76,7 +76,7 @@ def predict_onnx(obs, position, model_dir=None):
 
 
 def run_episode(models=None, eps=0.0, device='cpu', model_dir=None,
-                use_onnx=None):
+                use_onnx=None, baseline_dir=None, hero_positions=None):
     """跑一局自对弈.
 
     Args:
@@ -85,12 +85,20 @@ def run_episode(models=None, eps=0.0, device='cpu', model_dir=None,
         device: torch device (当 models 不为 None 时)
         model_dir: ONNX 模型目录 (当 models 为 None 时)
         use_onnx: 强制用 ONNX 推理
+        baseline_dir: 对手 ONNX 目录. 若提供, hero_positions 用候选模型
+                      (models), 其他位置用 baseline_dir 的 ONNX.
+                      这是「候选 vs 固定参考」的训练信号, 比自对弈更能
+                      测出真实强度变化.
+        hero_positions: 候选模型占据的位置集合. None = 三个位置都用候选.
 
     Returns:
         trajectories, rewards, winner, num_steps
     """
     if use_onnx is None:
         use_onnx = (models is None)
+
+    if hero_positions is None:
+        hero_positions = {'landlord', 'landlord_up', 'landlord_down'}
 
     env = Env(objective='adp')
     env.reset()
@@ -104,9 +112,15 @@ def run_episode(models=None, eps=0.0, device='cpu', model_dir=None,
     while not done and num_steps < max_steps:
         pos = env._acting_player_position
         obs = get_obs(env.infoset)
+        is_hero = pos in hero_positions
 
-        if np.random.random() < eps:
+        if np.random.random() < eps and is_hero:
+            # 只对 hero 位置做 epsilon 探索; baseline 位置始终走参考策略
             action_idx = np.random.randint(len(obs['legal_actions']))
+        elif baseline_dir is not None and not is_hero:
+            # 对手位置: 用固定基线 ONNX
+            values = predict_onnx(obs, pos, baseline_dir)
+            action_idx = int(np.argmax(values))
         elif use_onnx:
             values = predict_onnx(obs, pos, model_dir)
             action_idx = int(np.argmax(values))
@@ -122,14 +136,14 @@ def run_episode(models=None, eps=0.0, device='cpu', model_dir=None,
 
         action = obs['legal_actions'][action_idx]
 
-        # 只存选中 action 的特征行 (省内存: 每条 ~1KB vs ~10KB)
-        # 特征是 0/1 二值, 存 uint8 无损, 比 float32 省 4x
-        trajectories[pos].append({
-            'z': obs['z_batch'][action_idx].astype(np.uint8),   # (5, 162)
-            'x': obs['x_batch'][action_idx].astype(np.uint8),   # (x_dim,)
-            'action_idx': action_idx,
-            'num_legal': len(obs['legal_actions']),
-        })
+        # 只存 hero 的 trajectory (baseline 的决策不是学习信号)
+        if is_hero:
+            trajectories[pos].append({
+                'z': obs['z_batch'][action_idx].astype(np.uint8),
+                'x': obs['x_batch'][action_idx].astype(np.uint8),
+                'action_idx': action_idx,
+                'num_legal': len(obs['legal_actions']),
+            })
 
         obs_next, reward, done, _ = env.step(action)
         num_steps += 1
@@ -150,7 +164,8 @@ def run_episode(models=None, eps=0.0, device='cpu', model_dir=None,
 
 
 def collect_episodes(models=None, n_episodes=10, eps=0.0, device='cpu',
-                     model_dir=None, progress_every=10):
+                     model_dir=None, progress_every=10,
+                     baseline_dir=None, hero_positions=None):
     """跑 n_episodes 局, 返回所有 trajectory 和统计."""
     all_data = []
     stats = {'landlord_win': 0, 'farmer_win': 0,
@@ -159,7 +174,8 @@ def collect_episodes(models=None, n_episodes=10, eps=0.0, device='cpu',
     t0 = time.time()
     for i in range(n_episodes):
         traj, rewards, winner, steps = run_episode(
-            models, eps, device, model_dir)
+            models, eps, device, model_dir,
+            baseline_dir=baseline_dir, hero_positions=hero_positions)
 
         stats['total_steps'] += steps
         stats['total_reward'] += rewards['landlord']
