@@ -28,20 +28,34 @@ jobs:
             echo "value=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
           fi
 
-      # runner 自带 node (arm64). 确认版本够用 (SEA 不需要, 只要 >=16).
-      - name: Node version
-        run: node -v && file "$(command -v node)"
+      # Python 版斗地主 (DouZero AI) 用 PyInstaller 打包
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install deps
+        working-directory: python
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller aiohttp onnxruntime numpy
 
       - name: Build .app
+        working-directory: python
         run: ./build-app.sh
 
       - name: Verify artifact
+        working-directory: python
         run: |
           ls -lh dist/
           test -f "dist/斗地主.app/Contents/MacOS/launcher"
-          test -f "dist/斗地主.app/Contents/Resources/node"
-          test -f "dist/doudizhu.app.zip"
-          file "dist/斗地主.app/Contents/Resources/node"
+          test -f "dist/斗地主.app/Contents/Resources/_internal/斗地主"
+          test -f "dist/斗地主.app/Contents/Resources/_internal/models/landlord.onnx"
+          test -f "dist/斗地主.app/Contents/Resources/_internal/models_best/landlord.onnx"
+          test -f "dist/斗地主.app/Contents/Resources/_internal/models_sl/landlord.onnx"
+          test -f "dist/斗地主.app/Contents/Resources/_internal/models_wp_backup/landlord.onnx"
+          test -f "dist/doudizhu-py.app.zip"
+          file "dist/斗地主.app/Contents/Resources/_internal/斗地主"
 
       - name: Create Release & upload zip
         uses: softprops/action-gh-release@v2
@@ -49,14 +63,14 @@ jobs:
           tag_name: ${{ steps.tag.outputs.value }}
           name: 斗地主 ${{ steps.tag.outputs.value }}
           body: |
-            macOS Apple Silicon (arm64) 一键包.
+            macOS Apple Silicon (arm64) 一键包 (Python 版 · DouZero AI).
 
-            **用法**: 下载 `doudizhu.app.zip` → 解压 → 双击 `斗地主.app`.
+            **用法**: 下载 `doudizhu-py.app.zip` → 解压 → 双击 `斗地主.app`.
             首次打开如被 Gatekeeper 拦: 右键 → 打开 → 打开.
             启动后终端窗口保持开着, 浏览器打开打印的内网地址即可开局.
 
-            源码版: clone 本仓库后 `node server.js`.
-          files: dist/doudizhu.app.zip
+            源码版: `cd python && pip install aiohttp onnxruntime numpy && python3 server.py`.
+          files: python/dist/doudizhu-py.app.zip
           draft: false
           prerelease: false
           fail_on_unmatched_files: true
