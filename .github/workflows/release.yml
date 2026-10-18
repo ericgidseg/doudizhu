@@ -52,17 +52,14 @@ jobs:
           test -f "dist/斗地主.app/Contents/Resources/_internal/斗地主"
           test -f "dist/doudizhu-py.app.zip"
           file "dist/斗地主.app/Contents/Resources/_internal/斗地主"
-
-          # 模型的真实位置: PyInstaller 6.x 的 onedir 自带 _internal/, 而
-          # build-app.sh 又把 dist/斗地主 命名为 .../Resources/_internal/, 所以
-          # --add-data 的数据落在 _internal/_internal/ 下. 运行时用
-          # sys._MEIPASS 定位, 与嵌套路径自洽 (已实测 ONNX 投票集成正常).
-          # 路径写死成扁平会让这步误判失败 —— 用 find 兜住两种布局.
+          # 四个模型目录都在 _internal/ 直属: build-app.sh 用
+          # --contents-directory . 拍平了 PyInstaller 的 onedir 布局, 否则
+          # 数据会被收进 _internal/_internal/ (运行时靠 sys._MEIPASS 才不坏).
+          # 少任何一个都会让 ONNX 加载失败 —— 宁可在这步拦住, 别带病发版.
           for m in models models_best models_sl models_wp_backup; do
-            found=$(find "dist/斗地主.app" -type f -path "*/$m/landlord.onnx" | head -1)
-            test -n "$found" || { echo "❌ 缺少 $m/landlord.onnx"; exit 1; }
-            echo "  $m -> ${found#dist/斗地主.app/Contents/Resources/}"
+            test -f "dist/斗地主.app/Contents/Resources/_internal/$m/landlord.onnx"
           done
+          echo "✅ launcher / 可执行文件 / 4 组模型 / zip 全部就位"
 
       - name: Create Release & upload zip
         uses: softprops/action-gh-release@v2

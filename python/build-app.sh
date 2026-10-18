@@ -8,10 +8,16 @@ DIST="dist"
 ROOT="$(pwd)"
 
 echo "==> PyInstaller 打包 (onedir, 精简依赖)"
+# --contents-directory . : PyInstaller 6.x 默认把支持文件收进 onedir 产物的
+# _internal/ 子目录, 而下面又把整个 dist/斗地主 命名为
+# .app/Contents/Resources/_internal/ — 两层同名就叠成 _internal/_internal/
+# (模型实际落在深一层, 运行时靠 sys._MEIPASS 才没坏). 拍平后 models/ 等就在
+# _internal/ 直属, 与 HERE = sys._MEIPASS 的解析方式一致.
 pyinstaller --noconfirm --clean \
   --name "斗地主" \
   --onedir \
   --console \
+  --contents-directory . \
   --add-data "$ROOT/models:models" \
   --add-data "$ROOT/models_best:models_best" \
   --add-data "$ROOT/models_sl:models_sl" \
