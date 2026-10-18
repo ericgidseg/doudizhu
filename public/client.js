@@ -141,6 +141,14 @@ function renderScores(st) {
   }).join('');
 }
 
+/* ---------- 牌面排序 ---------- */
+/* 出牌区按点数从大到小排 (与手牌方向一致). 服务端 lastPlay.cards 是
+   按点击顺序给的, 直接渲染会出现 Q 9 K J 10 这种乱序. */
+const SORT_ORDER = ['3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A', '2', 'SJ', 'BJ'];
+const SORT_VAL = {};
+SORT_ORDER.forEach((r, i) => { SORT_VAL[r] = i; });
+const sortCards = cs => cs.slice().sort((a, b) => (SORT_VAL[b.rank] || 0) - (SORT_VAL[a.rank] || 0) || a.id - b.id);
+
 /* ---------- 记牌器: 显示已出的数量 ---------- */
 const COUNTER_RANKS = ['BJ', 'SJ', '2', 'A', 'K', 'Q', 'J', '10', '9', '8', '7', '6', '5', '4', '3'];
 function renderCounter(st) {
@@ -344,7 +352,7 @@ function renderPlayed(st) {
   tag.textContent = `${name} · ${lp.typeName}`;
   const box = document.createElement('div');
   box.className = 'cp-cards';
-  for (const c of lp.cards) box.appendChild(cardEl(c, { small: false, passive: true }));
+  for (const c of sortCards(lp.cards)) box.appendChild(cardEl(c, { small: false, passive: true }));
   cp.appendChild(tag); cp.appendChild(box);
 }
 function findCard(st, seat, id) {
