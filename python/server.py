@@ -24,11 +24,6 @@ PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
 # PyInstaller 打包后 __file__ 在临时解压目录; sys._MEIPASS 是 bundle 资源根
 HERE = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 PUBLIC = os.path.join(HERE, 'public')
-MIME = {
-    '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
-    '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.jpg': 'image/jpeg',
-    '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.json': 'application/json',
-}
 REPLAY_DIR = os.environ.get('DDZ_REPLAY_DIR') or os.path.join(
     os.path.expanduser('~'), 'Library', 'Application Support', 'doudizhu', 'replays')
 REPLAY_KEEP = 100
@@ -49,7 +44,7 @@ def new_room():
     return {'id': rid, 'players': [], 'hostSeat': -1,
             'phase': 'lobby', 'dealerIdx': 0,
             'bottom': [], 'currentBid': 0, 'currentBidder': -1,
-            'bids': [], 'turn': -1, 'passCount': 0,
+            'bidCount': 0, 'turn': -1, 'passCount': 0,
             'lastPlay': None, 'multiplier': 1, 'landlordSeat': -1,
             'played': [], 'action_seq_dz': [],
             'played_by': {0: [], 1: [], 2: []},
@@ -97,10 +92,14 @@ def seat_of(room, ws):
     return -1
 
 
+def new_player(ws, seat, name, bot=False, token=None):
+    return {'name': sanitize(name), 'ws': ws, 'seat': seat, 'hand': [],
+            'score': 0, 'bot': bot, 'token': token}
+
+
 def player_view(p):
     return {'seat': p['seat'], 'name': p['name'], 'cardCount': len(p['hand']),
             'online': bool(p.get('ws')) or bool(p.get('bot')),
-            'wins': p.get('wins', 0), 'bot': bool(p.get('bot')),
             'score': p.get('score', 0)}
 
 
@@ -162,15 +161,13 @@ def send_state(room):
     base = {'id': room['id'], 'phase': room['phase'], 'hostSeat': room['hostSeat'],
             'players': [player_view(p) for p in room['players']],
             'turn': room['turn'], 'currentBid': room['currentBid'],
-            'currentBidder': room['currentBidder'], 'bids': room['bids'],
-            'multiplier': room['multiplier'], 'difficulty': 'douzero',
-            'landlordSeat': room['landlordSeat'], 'bottomCount': len(room['bottom']),
-            'turnDeadline': room.get('turnDeadline'),
-            'turnSeconds': TURN_SECONDS}
+            'multiplier': room['multiplier'],
+            'landlordSeat': room['landlordSeat'],
+            'turnDeadline': room.get('turnDeadline')}
     lp = room.get('lastPlay')
     last_play = None
     if lp:
-        last_play = {'seat': lp['seat'], 'ids': list(lp['ids']),
+        last_play = {'seat': lp['seat'],
                      'cards': [{'id': c['id'], 'rank': c['rank'], 'suit': c['suit']}
                                for c in lp['cards']],
                      'typeName': lp['ana']['typeName']}
@@ -237,8 +234,7 @@ def add_bot(room):
     if len(room['players']) >= 3:
         return None
     seat = len(room['players'])
-    p = {'name': 'AI·' + '甲乙丙'[seat], 'ws': None, 'seat': seat,
-         'hand': [], 'wins': 0, 'score': 0, 'bot': True, 'token': None}
+    p = new_player(None, seat, 'AI·' + '甲乙丙'[seat], bot=True)
     room['players'].append(p)
     return p
 
@@ -253,7 +249,7 @@ def start_game(room):
     room['dealerIdx'] = random.randint(0, 2)
     room['turn'] = room['dealerIdx']
     room['currentBid'] = 0; room['currentBidder'] = -1
-    room['bids'] = [-1] * 3
+    room['bidCount'] = 0
     room['multiplier'] = 1; room['landlordSeat'] = -1
     room['passCount'] = 0; room['lastPlay'] = None
     room['played'] = []; room['action_seq_dz'] = []
@@ -269,14 +265,14 @@ def start_game(room):
 
 
 def apply_bid(room, seat, bid):
-    room['bids'][seat] = bid
+    room['bidCount'] += 1
     if room['replay']:
         room['replay']['actions'].append({'type': 'bid', 'seat': seat, 'bid': bid})
     if bid > room['currentBid']:
         room['currentBid'] = bid; room['currentBidder'] = seat
     name = room['players'][seat]['name']
     broadcast(room, 'event', event=f"{name} {'不叫' if bid == 0 else '叫 ' + str(bid) + ' 分'}")
-    if bid == 3 or all(b != -1 for b in room['bids']):
+    if bid == 3 or room['bidCount'] == 3:
         if room['currentBidder'] == -1:
             broadcast(room, 'event', event='无人叫地主, 重新发牌')
             async def _again():
@@ -377,7 +373,6 @@ def end_game(room, winner_seat):
                               finishedAt=datetime.now(timezone.utc).isoformat())
         save_replay(room)
     fw = room['landlordSeat'] if landlord_win else winner_seat
-    room['players'][fw]['wins'] = room['players'][fw].get('wins', 0) + 1
     base = room['currentBid'] or 1
     stake = base * room['multiplier']
     scores = []
@@ -410,14 +405,20 @@ def room_of(ws):
     return ws_room.get(id(ws))
 
 
-def on_create(ws, d):
-    room = new_room()
-    p = {'name': sanitize(d.get('name')), 'ws': ws, 'seat': 0, 'hand': [],
-         'wins': 0, 'score': 0, 'bot': False, 'token': secrets.token_hex(16)}
-    room['players'].append(p); room['hostSeat'] = 0
+def join_room(ws, room, p):
+    """把玩家放进房间并绑定 ws (create/join/solo 共用)."""
+    room['players'].append(p)
     rooms[room['id']] = room
     ws_room[id(ws)] = room
-    send_to(ws, {'type': 'joined', 'roomId': room['id'], 'seat': 0, 'token': p['token']})
+    send_to(ws, {'type': 'joined', 'roomId': room['id'], 'seat': p['seat'],
+                 'token': p['token']})
+
+
+def on_create(ws, d):
+    room = new_room()
+    p = new_player(ws, 0, d.get('name'), token=secrets.token_hex(16))
+    room['hostSeat'] = 0
+    join_room(ws, room, p)
     send_state(room)
 
 
@@ -442,12 +443,9 @@ def on_join(ws, d):
         send_state(room); return
     if len(room['players']) >= 3:
         return err(ws, '房间已满')
-    seat = len(room['players'])
-    p = {'name': sanitize(d.get('name')), 'ws': ws, 'seat': seat, 'hand': [],
-         'wins': 0, 'score': 0, 'bot': False, 'token': secrets.token_hex(16)}
-    room['players'].append(p)
-    ws_room[id(ws)] = room
-    send_to(ws, {'type': 'joined', 'roomId': room['id'], 'seat': seat, 'token': p['token']})
+    p = new_player(ws, len(room['players']), d.get('name'),
+                   token=secrets.token_hex(16))
+    join_room(ws, room, p)
     broadcast(room, 'event', event=f"{p['name']} 加入了房间")
     send_state(room)
 
@@ -566,13 +564,9 @@ def on_addbot(ws, d):
 
 def on_solo(ws, d):
     room = new_room()
-    p = {'name': sanitize(d.get('name')), 'ws': ws, 'seat': 0, 'hand': [],
-         'wins': 0, 'score': 0, 'bot': False, 'token': None}
-    room['players'].append(p); room['hostSeat'] = 0
+    room['hostSeat'] = 0
+    join_room(ws, room, new_player(ws, 0, d.get('name')))
     add_bot(room); add_bot(room)
-    rooms[room['id']] = room
-    ws_room[id(ws)] = room
-    send_to(ws, {'type': 'joined', 'roomId': room['id'], 'seat': 0})
     broadcast(room, 'event', event='单人模式: 你 + 2 个 AI')
     send_state(room)
     async def _go():
@@ -589,16 +583,9 @@ def on_rooms(ws, d):
     send_to(ws, {'type': 'rooms', 'rooms': lst})
 
 
-def on_setdiff(ws, d):
-    room = room_of(ws)
-    if room and seat_of(room, ws) == room['hostSeat']:
-        broadcast(room, 'event', event='AI 难度: DouZero 传说')
-        send_state(room)
-
-
 HANDLERS = {'create': on_create, 'join': on_join, 'start': on_start, 'bid': on_bid,
             'play': on_play, 'pass': on_pass, 'hint': on_hint, 'chat': on_chat,
-            'rooms': on_rooms, 'addbot': on_addbot, 'solo': on_solo, 'setdiff': on_setdiff}
+            'rooms': on_rooms, 'addbot': on_addbot, 'solo': on_solo}
 
 
 # ---------------- HTTP + WS ----------------

@@ -39,9 +39,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-from model import (DMCModel, DouZeroModel, predict, load_onnx_weights,
-                   export_to_onnx, verify_export, X_DIMS, MODEL_DIR)
-from env.env import Env, get_obs
+from model import DMCModel, export_to_onnx
 from selfplay import run_episode, clear_onnx_cache
 
 DEVICE = 'cpu'  # CPU 推理自对弈, MPS 收益小开销大
@@ -89,60 +87,6 @@ def collect_batch(models, n_games, eps, device,
                 })
 
     return batch_data, stats
-
-
-# ---------------------------------------------------------------------------
-# DMC Loss
-# ---------------------------------------------------------------------------
-
-def dmc_loss(model, batch, device):
-    """计算 DMC loss: MSE(Q(s,a), episode_return).
-
-    batch: list of dicts with keys:
-        z_batch: (n_legal, 5, 162) numpy
-        x_batch: (n_legal, x_dim) numpy
-        action_idx: int
-        reward: float
-    """
-    total_loss = 0.0
-    n_samples = 0
-
-    for item in batch:
-        z = torch.from_numpy(item['z_batch']).float().to(device)
-        x = torch.from_numpy(item['x_batch']).float().to(device)
-        action_idx = item['action_idx']
-        reward = item['reward']
-
-        # 前向: 所有合法动作的 Q 值
-        values = model(z, x).squeeze(-1)  # (n_legal,)
-
-        # 只对选中的 action 算 loss
-        target = torch.tensor(reward, dtype=torch.float32, device=device)
-        loss = (values[action_idx] - target) ** 2
-        total_loss += loss
-        n_samples += 1
-
-    return total_loss / max(n_samples, 1)
-
-
-def dmc_loss_batched(model, z_all, x_all, action_idx_all, reward_all, device):
-    """向量化 DMC loss — 更高效.
-
-    z_all: (N, 5, 162)  — 只取选中 action 的 obs
-    x_all: (N, x_dim)
-    action_idx_all: (N,)
-    reward_all: (N,)
-    """
-    z = torch.from_numpy(z_all).float().to(device)
-    x = torch.from_numpy(x_all).float().to(device)
-    rewards = torch.from_numpy(reward_all).float().to(device)
-
-    # 注意: z_all/x_all 是 (N, seq, feat) — 每个样本只有选中 action 的特征
-    # 但模型需要对所有合法动作求 Q, 然后取 action_idx 对应的值
-    # 为了效率, 我们直接用每个样本的 z/x 前向
-    values = model(z, x).squeeze(-1)  # (N,)
-    loss = ((values - rewards) ** 2).mean()
-    return loss
 
 
 # ---------------------------------------------------------------------------
@@ -247,7 +191,7 @@ def train_iteration(models, optimizers, buffer, args, device):
     return stats, train_stats, collect_time
 
 
-def evaluate(models, n_games, device, tmp_dir, ref_dir=None):
+def evaluate(models, n_games, tmp_dir, ref_dir=None):
     """评估当前模型 — 用固定参考对手, 而不是自对弈.
 
     为什么不用自对弈 LL_WR: 冻结地主时农民变弱会让 LL_WR 升高,
@@ -269,8 +213,8 @@ def evaluate(models, n_games, device, tmp_dir, ref_dir=None):
     if ref_dir is None:
         ref_dir = os.path.join(os.path.dirname(__file__), 'models')
 
-    from arena import arena
-    res = arena(tmp_dir, ref_dir, n_games)
+    from arena import arena, single_policy
+    res = arena(single_policy(tmp_dir), single_policy(ref_dir), n_games)
     return res['overall'], res['as_landlord'], res['as_farmer']
 
 
@@ -365,7 +309,9 @@ def main():
                         help='导出所需的最小 arena 提升 (默认 0.02, '
                              '低于此值不导出, 避免用变差的模型覆盖)')
     parser.add_argument('--baseline-dir', type=str, default=None,
-                        help='评估对比的 baseline ONNX 目录')
+                        help='对手 ONNX 目录. 配合 --hero-positions 使用: '
+                             '非 hero 位置由它决策 (默认 models/). '
+                             '评估时也用它作为参考对手.')
     parser.add_argument('--hero-positions', type=str, default=None,
                         help='候选模型占据的位置 (逗号分隔, e.g. "landlord" '
                              '或 "landlord_up,landlord_down"). '
@@ -394,20 +340,11 @@ def main():
     print(f'Epsilon: {args.eps} -> decay {args.eps_decay}')
     print()
 
-    # 加载模型 — 自对弈推理用 CPU (MPS 对小 tensor 有 overhead)
+    # 加载模型 (自对弈推理用 CPU, MPS 对小 tensor 开销大)
     print('Loading ONNX weights...')
-    models = DMCModel(device='cpu')
+    models = DMCModel()
     models.load_onnx_all(args.model_dir)
-    models.to('cpu')
     models.eval()
-
-    # Baseline (用于评估)
-    baseline = None
-    if args.baseline_dir:
-        baseline = DMCModel(device='cpu')
-        baseline.load_onnx_all(args.baseline_dir)
-        baseline.to('cpu')
-        baseline.eval()
 
     # Optimizer — 可选冻结某些位置
     args.freeze_set = set()
@@ -477,7 +414,7 @@ def main():
             # 评估 — 用固定参考对手的 arena 胜率 (自对弈 LL_WR 会误导)
             if (it + 1) % args.eval_every == 0:
                 wr, wr_ll, wr_fa = evaluate(
-                    models, args.eval_games, device, tmp_dir)
+                    models, args.eval_games, tmp_dir, args.baseline_dir)
                 print(f'  >> Arena vs baseline: 综合={wr:.3f} '
                       f'(地主 {wr_ll:.3f} / 农民 {wr_fa:.3f})')
                 history[-1]['arena_wr'] = wr

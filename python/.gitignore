@@ -4,14 +4,8 @@ dist/
 # 训练中间态 (52MB)
 checkpoints/
 
-# 实验模型: 微调/自对弈的中间产物, 结论见 MCTS_增强方案.md
-# 注意 models_sl/ 和 models_wp_backup/ 不在此列 —— 投票集成要用, 见下
-models_v2/
-models_v3/
-models_v4/
-models_hybrid/
-# hero vs baseline 训练的中间产物 (一轮训练多次评估导出)
-models_exp*/
+# 训练/微调的中间产物. models_sl/ 和 models_wp_backup/ 不在列 —— 投票集成要用
+models_*/
 
 # Python
 __pycache__/

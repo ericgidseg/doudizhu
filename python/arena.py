@@ -1,11 +1,15 @@
-"""固定对手竞技场 — 正确评估模型强弱.
+"""固定对手竞技场 — 评估模型强弱.
 
-为什么不能用自对弈 LL_WR:
-  地主被冻结时, 农民变弱 → 地主胜率反而升高.
-  所以自对弈 LL_WR 升高可能是模型变差的信号, 不能用来选模型.
+不能用自对弈 LL_WR: 地主被冻结时农民变弱 → 地主胜率反而升高,
+所以 LL_WR 升高可能是模型变差的信号.
 
-正确做法: 候选模型 vs 固定参考模型, 两种角色各打一半, 算候选的综合胜率.
+正确做法: 候选 vs 固定参考, 两种角色各打一半, 算综合胜率.
   综合胜率 > 0.5 才说明候选真的更强.
+
+两种评估口径:
+  单模型  python3 arena.py -x models_v3 -y models -n 1000
+  vote    python3 arena.py -x models_v3 -y models -n 600 --vote
+          (按游戏实际策略: ADP+WP+SL 三模型 Q 值归一化后投票; --full 三个全换)
 
 用法:
   python3 arena.py -x models_v3 -y models -n 1000
@@ -17,65 +21,80 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(__file__))
 
+# 批量评估限制线程数, 否则 onnxruntime 默认吃满所有核心 (实测 955% CPU).
+# 必须在 import selfplay 之前设置 (它在模块加载时读取).
+os.environ.setdefault('ORT_NUM_THREADS', '2')
+
+import onnxruntime as ort
 from env.env import Env, get_obs
 from selfplay import predict_onnx, clear_onnx_cache
 
-# 限制 onnxruntime 线程数: 默认会用满所有核心 (实测 955% CPU),
-# 长时间跑会明显影响机器其他工作.
-_NUM_THREADS = int(os.environ.get('ORT_NUM_THREADS', '2'))
+BASE = os.path.dirname(__file__)
+ORT_NUM_THREADS = int(os.environ['ORT_NUM_THREADS'])
+
+# 游戏默认的三个投票模型 (见 ai_douzero.py)
+GAME_DIRS = {'adp': os.path.join(BASE, 'models'),
+             'wp': os.path.join(BASE, 'models_wp_backup'),
+             'sl': os.path.join(BASE, 'models_sl')}
+
+_vote_sessions = {}
 
 
-def run_episode_mixed(landlord_dir, farmer_dir, eps=0.0, max_steps=200):
-    """地主用 landlord_dir, 两个农民都用 farmer_dir, 跑一局.
+def _vote_values(obs, pos, dirs):
+    """按游戏的 vote 逻辑算 Q 值: 各自 min-max 归一化后平均."""
+    inp = {'z': obs['z_batch'], 'x': obs['x_batch']}
+    vals = []
+    for d in dirs:
+        key = (d, pos)
+        if key not in _vote_sessions:
+            so = ort.SessionOptions()
+            so.intra_op_num_threads = ORT_NUM_THREADS
+            so.inter_op_num_threads = 1
+            _vote_sessions[key] = ort.InferenceSession(
+                os.path.join(d, f'{pos}.onnx'), so, providers=['CPUExecutionProvider'])
+        v = _vote_sessions[key].run(['values'], inp)[0].flatten()
+        vals.append((v - v.min()) / max(v.max() - v.min(), 1e-9))
+    return np.mean(vals, axis=0)
 
-    返回 (winner, bomb_num). winner ∈ {'landlord', 'farmer'}.
-    """
+
+def single_policy(model_dir):
+    """单模型 argmax 策略."""
+    return lambda obs, pos: int(np.argmax(predict_onnx(obs, pos, model_dir)))
+
+
+def vote_policy(dirs):
+    """三模型投票策略."""
+    return lambda obs, pos: int(np.argmax(_vote_values(obs, pos, dirs)))
+
+
+def play_episode(ll_policy, fa_policy, max_steps=200):
+    """地主用 ll_policy, 两个农民都用 fa_policy, 跑一局."""
     env = Env(objective='adp')
     env.reset()
-
     done = False
     steps = 0
     while not done and steps < max_steps:
         pos = env._acting_player_position
         obs = get_obs(env.infoset)
-
-        if eps > 0 and np.random.random() < eps:
-            idx = np.random.randint(len(obs['legal_actions']))
-        else:
-            d = landlord_dir if pos == 'landlord' else farmer_dir
-            values = predict_onnx(obs, pos, d)
-            idx = int(np.argmax(values))
-
-        _, _, done, _ = env.step(obs['legal_actions'][idx])
+        policy = ll_policy if pos == 'landlord' else fa_policy
+        _, _, done, _ = env.step(obs['legal_actions'][policy(obs, pos)])
         steps += 1
+    return env._game_winner
 
-    return getattr(env, '_game_winner', 'farmer'), env._game_bomb_num
 
-
-def arena(dir_x, dir_y, n_games, eps=0.0):
-    """X vs Y 竞技场, 两种角色各一半.
-
-    Returns dict:
-      overall      X 的综合胜率 (0.5 = 势均力敌)
-      as_landlord  X 当地主时的胜率
-      as_farmer    X 当农民时的胜率
-      n_*          各角色的局数
-    """
-    x_wins = 0
-    ll_wins = ll_games = 0
-    fa_wins = fa_games = 0
+def arena(policy_x, policy_y, n_games):
+    """X vs Y, 两种角色各一半. 返回 X 的综合/分角色胜率."""
+    x_wins = ll_wins = ll_games = fa_wins = fa_games = 0
 
     for i in range(n_games):
-        if i % 2 == 0:
-            # X 当地主
-            winner, _ = run_episode_mixed(dir_x, dir_y, eps)
+        if i % 2 == 0:              # X 当地主
+            winner = play_episode(policy_x, policy_y)
             ll_games += 1
             if winner == 'landlord':
                 x_wins += 1
                 ll_wins += 1
-        else:
-            # X 当农民 (Y 当地主)
-            winner, _ = run_episode_mixed(dir_y, dir_x, eps)
+        else:                       # X 当农民 (Y 当地主)
+            winner = play_episode(policy_y, policy_x)
             fa_games += 1
             if winner == 'farmer':
                 x_wins += 1
@@ -85,7 +104,6 @@ def arena(dir_x, dir_y, n_games, eps=0.0):
         'overall': x_wins / max(n_games, 1),
         'as_landlord': ll_wins / max(ll_games, 1),
         'as_farmer': fa_wins / max(fa_games, 1),
-        'n_games': n_games,
         'n_as_landlord': ll_games,
         'n_as_farmer': fa_games,
     }
@@ -93,26 +111,40 @@ def arena(dir_x, dir_y, n_games, eps=0.0):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('-x', '--dir-x', type=str, required=True,
-                        help='候选模型目录')
-    parser.add_argument('-y', '--dir-y', type=str, default='models',
-                        help='参考模型目录 (默认: models)')
+    parser.add_argument('-x', '--dir-x', type=str, required=True, help='候选模型目录')
+    parser.add_argument('-y', '--dir-y', type=str, default='models', help='参考模型目录')
     parser.add_argument('-n', '--num-games', type=int, default=1000)
+    parser.add_argument('--vote', action='store_true',
+                        help='按游戏实际的 vote 集成评估 (而不是单模型)')
+    parser.add_argument('--full', action='store_true',
+                        help='vote 模式下 X 的三个模型全部换成 --dir-x')
+    parser.add_argument('--wp-x', default=None, help='vote 模式下 X 的 WP 目录')
+    parser.add_argument('--sl-x', default=None, help='vote 模式下 X 的 SL 目录')
     args = parser.parse_args()
 
-    base = os.path.dirname(__file__)
-    dir_x = os.path.join(base, args.dir_x) if not os.path.isabs(args.dir_x) else args.dir_x
-    dir_y = os.path.join(base, args.dir_y) if not os.path.isabs(args.dir_y) else args.dir_y
+    def resolve(d):
+        return d if os.path.isabs(d) else os.path.join(BASE, d)
 
-    # 确保读到的是最新导出的文件
-    clear_onnx_cache(dir_x)
-    clear_onnx_cache(dir_y)
+    dir_x, dir_y = resolve(args.dir_x), resolve(args.dir_y)
 
-    print(f'X (candidate): {dir_x}')
-    print(f'Y (reference): {dir_y}')
+    if args.vote:
+        x_dirs = [dir_x] * 3 if args.full else [
+            dir_x,
+            resolve(args.wp_x) if args.wp_x else GAME_DIRS['wp'],
+            resolve(args.sl_x) if args.sl_x else GAME_DIRS['sl']]
+        y_dirs = [dir_y, GAME_DIRS['wp'], GAME_DIRS['sl']]
+        policy_x, policy_y = vote_policy(x_dirs), vote_policy(y_dirs)
+        print(f'X 集成: {x_dirs}')
+        print(f'Y 集成: {y_dirs}')
+    else:
+        clear_onnx_cache(dir_x)
+        clear_onnx_cache(dir_y)
+        policy_x, policy_y = single_policy(dir_x), single_policy(dir_y)
+        print(f'X (candidate): {dir_x}')
+        print(f'Y (reference): {dir_y}')
+
     print(f'Games: {args.num_games}\n')
-
-    res = arena(dir_x, dir_y, args.num_games)
+    res = arena(policy_x, policy_y, args.num_games)
 
     print(f'X 综合胜率   : {res["overall"]:.3f}   (0.5 = 势均力敌)')
     print(f'X 当地主胜率 : {res["as_landlord"]:.3f}   ({res["n_as_landlord"]} 局)')
