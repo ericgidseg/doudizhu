@@ -50,12 +50,19 @@ jobs:
           ls -lh dist/
           test -f "dist/斗地主.app/Contents/MacOS/launcher"
           test -f "dist/斗地主.app/Contents/Resources/_internal/斗地主"
-          test -f "dist/斗地主.app/Contents/Resources/_internal/models/landlord.onnx"
-          test -f "dist/斗地主.app/Contents/Resources/_internal/models_best/landlord.onnx"
-          test -f "dist/斗地主.app/Contents/Resources/_internal/models_sl/landlord.onnx"
-          test -f "dist/斗地主.app/Contents/Resources/_internal/models_wp_backup/landlord.onnx"
           test -f "dist/doudizhu-py.app.zip"
           file "dist/斗地主.app/Contents/Resources/_internal/斗地主"
+
+          # 模型的真实位置: PyInstaller 6.x 的 onedir 自带 _internal/, 而
+          # build-app.sh 又把 dist/斗地主 命名为 .../Resources/_internal/, 所以
+          # --add-data 的数据落在 _internal/_internal/ 下. 运行时用
+          # sys._MEIPASS 定位, 与嵌套路径自洽 (已实测 ONNX 投票集成正常).
+          # 路径写死成扁平会让这步误判失败 —— 用 find 兜住两种布局.
+          for m in models models_best models_sl models_wp_backup; do
+            found=$(find "dist/斗地主.app" -type f -path "*/$m/landlord.onnx" | head -1)
+            test -n "$found" || { echo "❌ 缺少 $m/landlord.onnx"; exit 1; }
+            echo "  $m -> ${found#dist/斗地主.app/Contents/Resources/}"
+          done
 
       - name: Create Release & upload zip
         uses: softprops/action-gh-release@v2
