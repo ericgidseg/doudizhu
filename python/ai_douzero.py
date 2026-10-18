@@ -195,8 +195,15 @@ def decide(room, seat):
 
     # other_hand_cards = 另外两家的当前手牌 = 全副牌 - 我的手牌 - 三家已出的牌
     all_cards = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14] * 4 + [17] * 4 + [20, 30]
+    # 用计数扣减而不是裸 list.remove: 状态异常 (同一张牌被计两次/重置不全)
+    # 时 .remove 会抛 ValueError 崩掉 decide 协程, 而计数法只会算出个数偏差,
+    # 决策照样能往下走.
+    _all_cnt = Counter(all_cards)
     for c in my_dz + [c for lst in played_by_pos.values() for c in lst]:
-        all_cards.remove(c)
+        _all_cnt[c] -= 1
+        if _all_cnt[c] < 0:
+            _all_cnt[c] = 0
+    all_cards = [c for c, n in _all_cnt.items() for _ in range(n)]
 
     # 两家都 pass 后由最后出牌者领出, 此时 last_move 作废
     last_dz = room['last_move_dz'] if room['passCount'] < 2 else []

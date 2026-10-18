@@ -54,12 +54,13 @@ EXPORT_DIR = os.path.join(os.path.dirname(__file__), 'models_v2')
 # 数据收集
 # ---------------------------------------------------------------------------
 
-def collect_batch(models, n_games, eps, device,
+def collect_batch(models, n_games, eps, _device,
                   baseline_dir=None, hero_positions=None):
     """跑 n_games 局, 返回 {position: [(z, x, action_idx, reward), ...]}.
 
     直接用 PyTorch CPU 推理自对弈 — 不需要 ONNX 导出.
-    训练用 device 梯度, 推理用 CPU (MPS 对小 batch 有 overhead).
+    _device: 只为兼容调用方签名保留; 自对弈固定走 CPU (MPS 对
+    小 batch 有 overhead, 收益小), 所以这里不使用它.
 
     baseline_dir: 若提供, hero_positions 用候选 models (PyTorch),
                   其他位置用 baseline_dir 的 ONNX. 让训练信号
@@ -68,10 +69,10 @@ def collect_batch(models, n_games, eps, device,
     batch_data = {p: [] for p in POSITIONS}
     stats = {'ll_win': 0, 'total_steps': 0, 'total_reward': 0.0}
 
-    # 模型已经在 device 上, predict 内部会处理 device transfer
+    # run_episode 内部固定 CPU 推理 (MPS 对小 batch 有 overhead), 与 device 无关
     for _ in range(n_games):
         traj, rewards, winner, steps = run_episode(
-            models=models, eps=eps, device=device,
+            models=models, eps=eps,
             baseline_dir=baseline_dir, hero_positions=hero_positions)
         stats['total_steps'] += steps
         stats['total_reward'] += rewards['landlord']

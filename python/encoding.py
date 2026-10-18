@@ -56,14 +56,18 @@ def _action_seq_list2array(action_seq_list):
 
 
 def _one_hot(num, max_num):
+    """剩余张数的 one-hot. num=0 (手牌出完) 时不能写 one_hot[-1] — 那会把
+    最高位误置 1, 语义变成"还剩最多", 越界时同理保持全零. """
     one_hot = np.zeros(max_num)
-    one_hot[num - 1] = 1
+    if 1 <= num <= max_num:
+        one_hot[num - 1] = 1
     return one_hot
 
 
 def _bomb_one_hot(bomb_num):
+    """炸弹数 one-hot (宽 15). 越界截到最后一格而不是抛 IndexError/负索引. """
     one_hot = np.zeros(15)
-    one_hot[bomb_num] = 1
+    one_hot[min(bomb_num, 14)] = 1
     return one_hot
 
 

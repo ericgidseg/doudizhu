@@ -20,7 +20,15 @@ from aiohttp import web, WSMsgType
 import cards as C
 import ai_douzero as AI
 
-PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
+def _get_port():
+    """端口解析. 只在 main() 里当服务端跑时才关心, 但本模块被 import 时
+    (如 test_ai.py `import server`) sys.argv 可能是 unittest 的 '-v'
+    之类非数字参数, 不能在这里抛异常."""
+    if len(sys.argv) > 1 and sys.argv[1].isdigit():
+        return int(sys.argv[1])
+    return 8000
+
+PORT = _get_port()
 # PyInstaller 打包后 __file__ 在临时解压目录; sys._MEIPASS 是 bundle 资源根
 HERE = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
 PUBLIC = os.path.join(HERE, 'public')
@@ -103,10 +111,26 @@ def player_view(p):
             'score': p.get('score', 0)}
 
 
-def send_to(ws, msg):
+def _safe_send(ws, payload):
+    """发字符串, 吞掉连接层的异常.
+
+    客户端可能在我们 ensure_future 之后、协程真正执行之前断开 (极端
+    时序), 那时 send_str 会抛 ConnectionResetError. 这个 task 没人 await,
+    异常只会变成事件循环里的 "Task exception was never retrieved" 噪音,
+    刷满 terminal 却没有任何信息量.
+    """
     if ws.closed:
         return
-    asyncio.ensure_future(ws.send_str(json.dumps(msg, ensure_ascii=False)))
+    async def _do():
+        try:
+            await ws.send_str(payload)
+        except (ConnectionResetError, ConnectionError, RuntimeError):
+            pass    # 对端已断开: 由 onclose / 清理逻辑负责, 不在这里管
+    asyncio.ensure_future(_do())
+
+
+def send_to(ws, msg):
+    _safe_send(ws, json.dumps(msg, ensure_ascii=False))
 
 
 def broadcast(room, msg, **data):
@@ -114,7 +138,7 @@ def broadcast(room, msg, **data):
     for p in room['players']:
         ws = p.get('ws')
         if ws and not ws.closed:
-            asyncio.ensure_future(ws.send_str(payload))
+            _safe_send(ws, payload)
 
 
 TURN_SECONDS = 30  # 每步思考时间, 超时自动 pass
@@ -565,7 +589,8 @@ def on_addbot(ws, d):
 def on_solo(ws, d):
     room = new_room()
     room['hostSeat'] = 0
-    join_room(ws, room, new_player(ws, 0, d.get('name')))
+    join_room(ws, room, new_player(ws, 0, d.get('name'),
+                                   token=secrets.token_hex(16)))
     add_bot(room); add_bot(room)
     broadcast(room, 'event', event='单人模式: 你 + 2 个 AI')
     send_state(room)
