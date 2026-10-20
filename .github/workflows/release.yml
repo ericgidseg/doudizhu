@@ -40,6 +40,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyinstaller aiohttp onnxruntime numpy
 
+      # 两份前端 (public/ 与 python/public/) 有意保留三处差异 (ws 路径 /
+      # turnBanner / 倒计时), 但牌面渲染这类共享逻辑必须两边相同.
+      # 历史上因漏改出过三次事故: 编码错位、牌序只改 Node 版、发布的版本落后
+      # 于修复. 放在构建前, 漂移时不让发版.
+      - name: Check frontend parity
+        run: ./tools/check_frontend_parity.sh
+
       - name: Build .app
         working-directory: python
         run: ./build-app.sh
