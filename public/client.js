@@ -141,13 +141,39 @@ function renderScores(st) {
   }).join('');
 }
 
-/* ---------- 牌面排序 ---------- */
-/* 出牌区按点数从大到小排 (与手牌方向一致). 服务端 lastPlay.cards 是
-   按点击顺序给的, 直接渲染会出现 Q 9 K J 10 这种乱序. */
+/* ---------- 出牌区牌序 ---------- */
+/* 服务端 lastPlay.cards 是玩家点选那张牌的原始顺序, 渲染前必须重排.
+   读牌习惯: 顺着念所以从小到大 (顺子 8 9 10 J Q, 不是 Q J 10 9 8);
+   带翅膀的结构 (三带一/三带二/飞机带单/飞机带对/四带二/四带二对)
+   则是主体点数在左、翅膀在右, 各自内部升序 —— 777 带 88 显示 777 88. */
 const SORT_ORDER = ['3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A', '2', 'SJ', 'BJ'];
 const SORT_VAL = {};
 SORT_ORDER.forEach((r, i) => { SORT_VAL[r] = i; });
-const sortCards = cs => cs.slice().sort((a, b) => (SORT_VAL[b.rank] || 0) - (SORT_VAL[a.rank] || 0) || a.id - b.id);
+const val = c => SORT_VAL[c.rank] ?? 0;
+/* 按点数分组 -> 升序 [{v, cards}] */
+const groupAsc = cs => {
+  const m = new Map();
+  for (const c of cs) {
+    if (!m.has(val(c))) m.set(val(c), []);
+    m.get(val(c)).push(c);
+  }
+  return [...m.entries()].sort((a, b) => a[0] - b[0]).map(([v, cards]) => ({ v, cards }));
+};
+/* 无翅膀牌型: 整体升序 */
+const sortPlayedPlain = cs => groupAsc(cs).flatMap(g => g.cards);
+/* 带翅膀牌型: 主体 = 连续 run 里张数最多的那些点 (>=3 张), 翅膀 = 其余 */
+const sortPlayedWithKickers = cs => {
+  const groups = groupAsc(cs);
+  const bodyVals = new Set(groups.filter(g => g.cards.length >= 3).map(g => g.v));
+  if (!bodyVals.size) return sortPlayedPlain(cs);   // 没识别出主体就不瞎猜
+  return [
+    ...groups.filter(g => bodyVals.has(g.v)).flatMap(g => g.cards),
+    ...groups.filter(g => !bodyVals.has(g.v)).flatMap(g => g.cards),
+  ];
+};
+const KICKER_TYPES = new Set(['三带一', '三带二', '飞机带单', '飞机带对', '四带二', '四带二对']);
+const sortPlayed = (cards, typeName) =>
+  KICKER_TYPES.has(typeName) ? sortPlayedWithKickers(cards) : sortPlayedPlain(cards);
 
 /* ---------- 记牌器: 显示已出的数量 ---------- */
 const COUNTER_RANKS = ['BJ', 'SJ', '2', 'A', 'K', 'Q', 'J', '10', '9', '8', '7', '6', '5', '4', '3'];
@@ -352,7 +378,7 @@ function renderPlayed(st) {
   tag.textContent = `${name} · ${lp.typeName}`;
   const box = document.createElement('div');
   box.className = 'cp-cards';
-  for (const c of sortCards(lp.cards)) box.appendChild(cardEl(c, { small: false, passive: true }));
+  for (const c of sortPlayed(lp.cards, lp.typeName)) box.appendChild(cardEl(c, { small: false, passive: true }));
   cp.appendChild(tag); cp.appendChild(box);
 }
 function findCard(st, seat, id) {
